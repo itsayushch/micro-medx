@@ -271,7 +271,7 @@ export function Sidebar({
         </div>
 
         {/* Section 3: Telemetry Engine Box */}
-        <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 space-y-2">
+        {/* <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 font-poppins">
               CDS Telemetry Engine
@@ -293,7 +293,7 @@ export function Sidebar({
               Immutable SHA-256
             </span>
           </div>
-        </div>
+        </div> */}
       </div>
 
       {/* Bottom User Card */}
