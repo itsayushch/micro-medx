@@ -1040,7 +1040,7 @@ export function DoctorView({
             </div>
 
             {/* 6-Agents Pipeline Trace (Dark Console) */}
-            {evaluationResult.six_agents_trace && (
+            {/* {evaluationResult.six_agents_trace && (
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 font-mono text-xs text-slate-100">
                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400">
                   <span className="flex items-center gap-1.5 text-blue-400 font-bold">
@@ -1059,7 +1059,7 @@ export function DoctorView({
                   ))}
                 </div>
               </div>
-            )}
+            )} */}
           </div>
         </div>
       )}
