@@ -17,22 +17,16 @@ import {
   SixAgentResult,
 } from "@/lib/types";
 import {
-  apiCosignOrder,
-  apiDispenseMedication,
   apiEvaluatePrescription,
-  apiGetAdminDashboard,
   apiGetDoctorDashboard,
-  apiGetLabReport,
-  apiGetNurseDashboard,
-  apiGetPatientHistory,
-  apiGetPharmacistDashboard,
-  apiRecordNurseVital,
-  apiRunScenario,
-  apiSubmitDoctorSubstitutionDecision,
-  apiSubmitMARAction,
-  apiSubmitSubstitutionRequest,
-  apiVerifyAuditChain,
 } from "@/lib/api";
+import { DETERMINISTIC_PATIENT_HISTORIES, DEMO_SCENARIO_RESULTS, LAB_REPORTS } from "@/lib/mock-data";
+import {
+  MOCK_ADMIN_DASHBOARD,
+  MOCK_DOCTOR_DASHBOARD,
+  MOCK_NURSE_DASHBOARD,
+  MOCK_PHARMACIST_DASHBOARD,
+} from "@/lib/dashboard-mocks";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { ToastProvider, useToast } from "@/components/ui/toast";
 import { Header } from "@/components/Header";
@@ -79,7 +73,6 @@ function DashboardApp() {
   const [pharmacistData, setPharmacistData] = React.useState<PharmacistDashboardData | null>(null);
   const [adminData, setAdminData] = React.useState<AdminDashboardData | null>(null);
   const [loading, setLoading] = React.useState(true);
-  const [dashboardError, setDashboardError] = React.useState<string | null>(null);
 
   // Re-Authentication on Role Transition (Doctor <-> Nurse)
   const [pendingRoleSwitch, setPendingRoleSwitch] = React.useState<{ from: RoleType; to: RoleType } | null>(null);
@@ -121,21 +114,31 @@ function DashboardApp() {
     pharmacistData?.availability_queue[0]?.patient_identifier ||
     adminData?.patients[0]?.id || "";
 
-  // Request only the authenticated role's dashboard; nonmatching role routes
-  // intentionally return 403 and are not needed by this workspace.
+  // Only persisted clinical findings are live. Everything else in the role
+  // dashboards is intentionally demo data for the hackathon MVP.
   const loadAllDashboards = React.useCallback(async () => {
     if (!isAuthenticated) return;
     setLoading(true);
-    setDashboardError(null);
-    try {
-      setDoctorData(null); setNurseData(null); setPharmacistData(null); setAdminData(null);
-      if (activeRole === "Doctor") { const result = await apiGetDoctorDashboard(); setDoctorData(result.data); setIsLiveApi(result.isLive); }
-      else if (activeRole === "Nurse") { const result = await apiGetNurseDashboard(); setNurseData(result.data); setIsLiveApi(result.isLive); }
-      else if (activeRole === "Clinical Pharmacist") { const result = await apiGetPharmacistDashboard(); setPharmacistData(result.data); setIsLiveApi(result.isLive); }
-      else { const result = await apiGetAdminDashboard(); setAdminData(result.data); setIsLiveApi(result.isLive); }
-    } catch (err) {
+    setDoctorData(MOCK_DOCTOR_DASHBOARD);
+    setNurseData(MOCK_NURSE_DASHBOARD);
+    setPharmacistData(MOCK_PHARMACIST_DASHBOARD);
+    setAdminData(MOCK_ADMIN_DASHBOARD);
+    if (activeRole !== "Doctor") {
       setIsLiveApi(false);
-      setDashboardError(err instanceof Error ? err.message : "Could not load dashboard from the backend.");
+      setLoading(false);
+      return;
+    }
+    try {
+      const result = await apiGetDoctorDashboard();
+      setDoctorData({
+        ...MOCK_DOCTOR_DASHBOARD,
+        active_findings: result.data.active_findings,
+        stats: { ...MOCK_DOCTOR_DASHBOARD.stats, active_findings_count: result.data.active_findings.length },
+      });
+      setIsLiveApi(result.isLive);
+    } catch {
+      // Dashboard demo data remains available when the findings service is offline.
+      setIsLiveApi(false);
     } finally {
       setLoading(false);
     }
@@ -197,23 +200,19 @@ function DashboardApp() {
 
   // Modal open handlers
   const handleOpenPatientHistory = async (identifier: string) => {
-    try {
-      const res = await apiGetPatientHistory(identifier);
-      setSelectedPatientHistory(res.data);
-      setIsHistoryDrawerOpen(true);
-    } catch {
-      showToast("Could not load patient medical record", "error");
-    }
+    const history = Object.values(DETERMINISTIC_PATIENT_HISTORIES).find(
+      (item) => item.case_id === identifier || item.patient_identifier === identifier,
+    );
+    if (!history) { showToast("No demo history is available for this record.", "info"); return; }
+    setSelectedPatientHistory(history);
+    setIsHistoryDrawerOpen(true);
   };
 
   const handleOpenLabSource = async (reportId: string) => {
-    try {
-      const res = await apiGetLabReport(reportId);
-      setSelectedLabReport(res.data);
-      setIsLabModalOpen(true);
-    } catch {
-      showToast("Could not retrieve laboratory source evidence", "error");
-    }
+    const report = LAB_REPORTS[reportId];
+    if (!report) { showToast("No demo lab report is available.", "info"); return; }
+    setSelectedLabReport(report);
+    setIsLabModalOpen(true);
   };
 
   const handleOpenAvailabilityModal = (item: AvailabilityQueueItem) => {
@@ -243,27 +242,25 @@ function DashboardApp() {
 
   // Async action handlers
   const handleApproveDoctorSub = async (requestId: string, notes: string) => {
-    const result = await apiSubmitDoctorSubstitutionDecision(requestId, "APPROVED", notes);
-    if (!result.success) throw new Error(result.message || "The substitution decision was not recorded.");
-    await loadAllDashboards();
+    setDoctorData((current) => current ? { ...current, substitution_requests: current.substitution_requests.map((item) =>
+      String(item.request_id) === requestId ? { ...item, status: "APPROVED" } : item) } : current);
+    showToast(`Demo request approved${notes ? " with notes" : ""}; no backend record was changed.`, "info");
   };
 
   const handleRejectDoctorSub = async (requestId: string, notes: string) => {
-    const result = await apiSubmitDoctorSubstitutionDecision(requestId, "REJECTED", notes);
-    if (!result.success) throw new Error(result.message || "The substitution decision was not recorded.");
-    await loadAllDashboards();
+    setDoctorData((current) => current ? { ...current, substitution_requests: current.substitution_requests.map((item) =>
+      String(item.request_id) === requestId ? { ...item, status: "REJECTED" } : item) } : current);
+    showToast(`Demo request rejected${notes ? " with notes" : ""}; no backend record was changed.`, "info");
   };
 
   const handleCosignOrder = async (simId: string, reason: string) => {
-    const result = await apiCosignOrder(simId, "approved", currentUser?.name || "", reason);
-    if (!result.success) throw new Error(result.message || "The co-sign decision was not recorded.");
-    await loadAllDashboards();
+    void simId; void reason;
+    showToast("Demo co-sign recorded for this screen only; no backend record was changed.", "info");
   };
 
   const handleDispenseMedication = async (item: AvailabilityQueueItem) => {
-    const result = await apiDispenseMedication(item, currentUser?.name || "", "Inventory and dispensing verification requested.");
-    if (!result.success) throw new Error(result.message || "Dispensing verification was not recorded.");
-    await loadAllDashboards();
+    void item;
+    showToast("Demo dispensing action only; no medication was dispensed or backend record changed.", "info");
   };
 
   const handleSubmitSubstitution = async (
@@ -273,10 +270,8 @@ function DashboardApp() {
     notes: string,
     idempotencyKey: string
   ) => {
-    const result = await apiSubmitSubstitutionRequest(item, suggestedBrand, reason, notes, idempotencyKey);
-    if (!result.success) throw new Error(result.message || "The substitution request was not recorded.");
-    showToast(result.message, "success");
-    await loadAllDashboards();
+    void item; void suggestedBrand; void reason; void notes; void idempotencyKey;
+    showToast("Demo substitution request only; it was not sent to or saved by the backend.", "info");
   };
 
   const handleMARAction = async (
@@ -284,10 +279,8 @@ function DashboardApp() {
     action: "ADMINISTER" | "HOLD",
     notes: string
   ) => {
-    const result = await apiSubmitMARAction(orderId, action, notes);
-    if (!result.success) throw new Error(result.message || "The medication event was not recorded.");
-    showToast(result.message, "success");
-    await loadAllDashboards();
+    void orderId; void action; void notes;
+    showToast("Demo MAR action only; no medication event was saved.", "info");
   };
 
   const handleRecordVital = async (
@@ -296,20 +289,18 @@ function DashboardApp() {
     value: string,
     unit: string
   ) => {
-    await apiRecordNurseVital(patientId, param, value, unit);
-    await loadAllDashboards();
+    void patientId; void param; void value; void unit;
+    showToast("Demo vital entry only; it was not saved to a patient record.", "info");
   };
 
   const handleVerifyChain = async () => {
-    const result = await apiVerifyAuditChain();
-    await loadAllDashboards();
-    return { verified: result.verified, total_blocks: result.total_blocks, message: result.message };
+    return { verified: false, total_blocks: MOCK_ADMIN_DASHBOARD.stats.total_audit_events, message: "No live audit-chain verification was performed; displayed ledger is static demo data." };
   };
 
   const handleRunScenario = async (scenarioId: number): Promise<SixAgentResult> => {
-    const res = await apiRunScenario(scenarioId);
-    await loadAllDashboards();
-    return res.data;
+    const result = DEMO_SCENARIO_RESULTS[scenarioId];
+    if (!result) throw new Error("No static demo scenario is available for that selection.");
+    return result;
   };
 
   const handleEvaluateSandbox = async (drugName: string) => {
@@ -373,13 +364,13 @@ function DashboardApp() {
 
               <p className="text-sm text-slate-500 max-w-3xl leading-relaxed font-quicksand">
                 {activeRole === "Doctor" &&
-                  "Persisted patient records, substitution requests, rule findings, and clinician review."}
+                  "Demo workspace with live persisted clinical findings and the interactive severity advisory."}
                 {activeRole === "Nurse" &&
-                  "Persisted medication records, administration events, and laboratory observations."}
+                  "Static demo workspace. Medication records, administration events, and observations are examples only."}
                 {activeRole === "Clinical Pharmacist" &&
-                  "Persisted prescription and substitution workflow. Inventory is untracked in the connected database."}
+                  "Static demo workspace. Prescription, substitution, and inventory records are examples only."}
                 {activeRole === "Administrator" &&
-                  "Database-backed patient directory and audit-chain verification."}
+                  "Static demo workspace. Directory and audit-chain content are examples; no live verification is performed."}
               </p>
             </div>
 
@@ -407,16 +398,15 @@ function DashboardApp() {
             </div>
           </div>
 
+          <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-xs text-sky-900">
+            Demo mode: dashboard workflows and records are static examples. Only persisted clinical findings and the severity sandbox use the backend.
+          </div>
+
           {/* LOADING OR ROLE VIEW */}
-          {!sessionReady || (loading && !dashboardError) ? (
+          {!sessionReady || loading ? (
             <div className="p-12 text-center text-slate-500">
               <div className="inline-block h-8 w-8 animate-spin rounded-full border-3 border-blue-600 border-r-transparent mb-3" />
-              <div className="text-sm font-bold font-poppins">Initializing Clinical Workspaces &amp; Rules Engines...</div>
-            </div>
-          ) : dashboardError ? (
-            <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-800">
-              <strong>Backend data unavailable.</strong> {dashboardError}
-              <button className="ml-3 underline" onClick={() => void loadAllDashboards()}>Retry</button>
+              <div className="text-sm font-bold font-poppins">Loading demo workspace and persisted findings...</div>
             </div>
           ) : (
             <>
@@ -466,10 +456,10 @@ function DashboardApp() {
           {/* Modern Clean Footer */}
           <footer className="pt-4 pb-2 border-t border-slate-200/60 text-xs text-slate-400 flex flex-wrap justify-between items-center gap-2">
             <div>
-              <strong className="text-slate-800 font-bold font-poppins">Micro MedX</strong> &bull; Clinical Decision Support connected to persisted backend records
+              <strong className="text-slate-800 font-bold font-poppins">Micro MedX</strong> &bull; Demo workspace with limited backend MVP features
             </div>
             <div className="flex items-center gap-3 text-[11px] font-medium font-mono text-slate-500">
-              <span>Backend-connected workspace</span>
+              <span>{isLiveApi ? "Findings and severity sandbox connected" : "Demo data; live findings unavailable"}</span>
             </div>
           </footer>
         </main>
