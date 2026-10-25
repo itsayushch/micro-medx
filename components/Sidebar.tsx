@@ -47,7 +47,7 @@ const WORKSPACES: {
 }[] = [
   {
     role: "Doctor",
-    label: "Doctor Workstation",
+    label: "Doctor",
     sublabel: "Prescribing & CDS",
     icon: Stethoscope,
     color: "text-blue-600",
@@ -55,7 +55,7 @@ const WORKSPACES: {
   },
   {
     role: "Nurse",
-    label: "Nurse eMAR Station",
+    label: "Nurse",
     sublabel: "Bedside Administration",
     icon: HeartPulse,
     color: "text-teal-600",
@@ -63,7 +63,7 @@ const WORKSPACES: {
   },
   {
     role: "Clinical Pharmacist",
-    label: "Pharmacy & Formulary",
+    label: "Pharmacist",
     sublabel: "Fulfillment & Subs",
     icon: Pill,
     color: "text-purple-600",
@@ -71,7 +71,7 @@ const WORKSPACES: {
   },
   {
     role: "Administrator",
-    label: "Admin & Audit Ledger",
+    label: "Admin",
     sublabel: "Forensic Governance",
     icon: ShieldCheck,
     color: "text-slate-800",
