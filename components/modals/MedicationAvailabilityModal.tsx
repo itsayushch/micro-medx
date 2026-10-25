@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle2, AlertTriangle, Package, MapPin, ShieldCheck, ArrowRight } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Package, MapPin, ShieldCheck, ArrowRight, Pill, LoaderCircle } from "lucide-react";
 import { AvailabilityQueueItem } from "@/lib/types";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,17 @@ export function MedicationAvailabilityModal({
   onRequestSubstitution,
 }: MedicationAvailabilityModalProps) {
   const { showToast } = useToast();
-  const [submitting, setSubmitting] = React.useState(false);
+  const reviewKey = `${item?.case_id ?? ""}:${open}`;
+  const [review, setReview] = React.useState<{
+    key: string;
+    step: number;
+    complete: boolean;
+    running: boolean;
+  }>({ key: "", step: -1, complete: false, running: false });
+  const currentReview = review.key === reviewKey
+    ? review
+    : { key: reviewKey, step: -1, complete: false, running: false };
+  const { step: reviewStep, complete: reviewComplete, running: runningReview } = currentReview;
 
   if (!item) return null;
 
@@ -32,14 +42,21 @@ export function MedicationAvailabilityModal({
   const isUnavailable = item.availability === "UNAVAILABLE";
 
   const handleDispenseClick = async () => {
-    setSubmitting(true);
+    if (runningReview || reviewComplete) return;
+    setReview({ key: reviewKey, step: -1, complete: false, running: true });
     try {
+      // A timed, screen-only walkthrough; it deliberately makes no backend request.
+      for (let step = 0; step < 3; step += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 550));
+        setReview({ key: reviewKey, step, complete: false, running: true });
+      }
       await onDispense(item);
-      onOpenChange(false);
+      setReview({ key: reviewKey, step: 2, complete: true, running: false });
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Dispensing verification is unavailable.", "error");
+      setReview({ key: reviewKey, step: -1, complete: false, running: false });
     } finally {
-      setSubmitting(false);
+      setReview((current) => current.key === reviewKey ? { ...current, running: false } : current);
     }
   };
 
@@ -47,6 +64,10 @@ export function MedicationAvailabilityModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent onClose={() => onOpenChange(false)} maxWidthClass="max-w-2xl">
         <DialogHeader className="bg-slate-50/90">
+          <div className="flex items-center gap-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-blue-700">
+            <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm"><Pill className="h-3.5 w-3.5" /></span>
+            Micro MedX <span className="text-slate-300">/</span> Pharmacy order review
+          </div>
           <div className="flex items-center justify-between pr-8">
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono font-bold bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded">
@@ -57,15 +78,15 @@ export function MedicationAvailabilityModal({
             {isAvailable ? (
               <Badge variant="success" className="gap-1.5 py-1 px-3">
                 <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                Backend reports available
+                Sample inventory · Available
               </Badge>
             ) : isUnavailable ? (
               <Badge variant="critical" className="gap-1.5 py-1 px-3">
                 <AlertTriangle className="h-3.5 w-3.5 text-red-600" />
-                Backend reports unavailable
+                Sample inventory · Unavailable
               </Badge>
             ) : (
-              <Badge variant="secondary" className="gap-1.5 py-1 px-3">Availability not tracked</Badge>
+              <Badge variant="secondary" className="gap-1.5 py-1 px-3">Sample inventory · Not tracked</Badge>
             )}
           </div>
           <DialogTitle className="mt-1 text-xl font-extrabold text-slate-900">
@@ -112,7 +133,7 @@ export function MedicationAvailabilityModal({
                   <div>
                     <div className="text-xs text-slate-500 font-medium">Formulary Bin Location</div>
                     <div className="text-sm font-bold text-slate-900">{item.bin_location || "Not recorded"}</div>
-                    <div className="text-xs text-slate-400 mt-0.5">Location data from backend</div>
+                    <div className="text-xs text-slate-400 mt-0.5">Sample inventory location</div>
                   </div>
                 </div>
 
@@ -130,11 +151,43 @@ export function MedicationAvailabilityModal({
 
               {/* Safety Pre-checks */}
               <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 space-y-2.5">
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                   <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                  Pharmacist Clinical Pre-Dispensing Checklist
+                  Pre-Dispensing Review
                 </div>
-                <p className="text-xs text-slate-600">Availability status does not verify allergies, product equivalence, or prescription authorization. Confirm these through the established clinical workflow before dispensing.</p>
+                <p className="text-xs text-slate-600">Inventory shown here comes from a sample catalog. Confirm patient, prescription authorization, allergies, product equivalence, and physical stock through the clinical workflow before dispensing.</p>
+              </div>
+
+              <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4 space-y-3" aria-live="polite">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wider text-blue-900">Order review</div>
+                    <p className="mt-1 text-xs text-slate-600">Review the prescription details, inventory record, and pre-dispensing checklist.</p>
+                  </div>
+                  {runningReview && <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-blue-600" aria-label="Review running" />}
+                </div>
+                <ol className="space-y-2 text-xs">
+                  {[
+                    "Read the displayed prescription details",
+                    `Check sample inventory record: ${item.availability === "AVAILABLE" ? "available" : "not tracked"}`,
+                    "Show the pharmacist pre-dispensing checklist",
+                  ].map((label, index) => {
+                    const done = reviewStep >= index;
+                    const active = runningReview && reviewStep === index - 1;
+                    return (
+                      <li key={label} className="flex items-center gap-2 text-slate-700">
+                        {done ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : active ? <LoaderCircle className="h-4 w-4 animate-spin text-blue-600" /> : <span className="h-4 w-4 rounded-full border border-slate-300" />}
+                        <span>{label}</span>
+                        {done && <span className="ml-auto text-[10px] font-semibold text-emerald-700">Complete</span>}
+                      </li>
+                    );
+                  })}
+                </ol>
+                {reviewComplete && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                    <strong>Review complete.</strong> This review covers the displayed order and sample inventory record only. It did not verify physical stock, authorize the prescription, or dispense medication.
+                  </div>
+                )}
               </div>
             </div>
           ) : isUnavailable ? (
@@ -207,11 +260,11 @@ export function MedicationAvailabilityModal({
             <Button
               variant="success"
               onClick={handleDispenseClick}
-              disabled={submitting}
+              disabled={runningReview || reviewComplete}
               className="gap-2 font-bold"
             >
               <CheckCircle2 className="h-4 w-4" />
-              {submitting ? "Checking..." : "Request backend dispensing verification"}
+              {runningReview ? "Reviewing order..." : reviewComplete ? "Review complete" : "Run order review"}
             </Button>
           ) : (
             <Button

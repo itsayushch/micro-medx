@@ -267,7 +267,7 @@ function DashboardApp() {
 
   const handleDispenseMedication = async (item: AvailabilityQueueItem) => {
     void item;
-    showToast("Demo dispensing action only; no medication was dispensed or backend record changed.", "info");
+    showToast("Order review completed for this screen session. No backend record was changed and no medication was dispensed.", "info");
   };
 
   const handleSubmitSubstitution = async (
