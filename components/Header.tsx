@@ -125,7 +125,7 @@ export function Header({
         {/* Right Section: System Status & User Actions */}
         <div className="flex items-center gap-2.5">
           {/* Real-time Status Badge */}
-          <div className={`hidden sm:inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-medium shadow-3xs ${isLiveApi ? "bg-emerald-50/90 border-emerald-200/80 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
+          {/* <div className={`hidden sm:inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-medium shadow-3xs ${isLiveApi ? "bg-emerald-50/90 border-emerald-200/80 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
             <span className="relative flex h-2 w-2">
               {isLiveApi && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
               <span className={`relative inline-flex rounded-full h-2 w-2 ${isLiveApi ? "bg-emerald-500" : "bg-rose-500"}`}></span>
@@ -133,7 +133,7 @@ export function Header({
             <span className="font-bold text-[11px] tracking-tight font-poppins">
               {isLiveApi ? "REST API Connected" : "API unavailable"}
             </span>
-          </div>
+          </div> */}
 
           {/* Refresh Action */}
           {onRefresh && (

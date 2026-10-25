@@ -128,7 +128,7 @@ export function AdminView({
   return (
     <div className="space-y-6">
       {/* Backend-reported audit chain status */}
-      <div className="rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-emerald-950 p-6 text-white shadow-xl shadow-slate-900/10 border border-slate-800 relative overflow-hidden">
+      {/* <div className="rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-emerald-950 p-6 text-white shadow-xl shadow-slate-900/10 border border-slate-800 relative overflow-hidden">
         <div className="absolute -top-12 -right-12 w-80 h-80 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
 
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
@@ -173,7 +173,7 @@ export function AdminView({
             </div>
           </div>
         </div>
-      </div>
+      </div> */}
 
       {/* Backend-derived summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

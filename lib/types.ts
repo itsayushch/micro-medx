@@ -216,6 +216,8 @@ export interface SixAgentResult {
 }
 
 export interface PairSeverityAdvisoryResult {
+  drug_a: string;
+  drug_b: string;
   advisory: {
     drug_a: string;
     drug_b: string;
@@ -229,7 +231,7 @@ export interface PairSeverityAdvisoryResult {
     explanation_text: string;
     disclaimer: string;
     limitations: string[];
-  };
+  } | null;
   notice: string;
 }
 

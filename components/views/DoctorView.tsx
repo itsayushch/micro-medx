@@ -14,7 +14,6 @@ import {
   ChevronRight,
   Sparkles,
   Zap,
-  Activity,
   User,
   Layers,
   FileText,
@@ -24,23 +23,20 @@ import {
   Users,
   RefreshCw,
   Info,
-  Plus,
   Trash2,
-  X,
 } from "lucide-react";
 import {
   DoctorDashboardData,
-  PairSeverityAdvisoryResult,
   PatientDirectoryItem,
   SixAgentResult,
   SubstitutionRequestItem,
   PendingCosignItem,
 } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { MetricCard } from "@/components/ui/metric-card";
+import { DeterministicDdiReview } from "@/components/views/DeterministicDdiReview";
+import { findDdiRuleExample, type DdiReviewDrug } from "@/lib/ddi-rule-examples";
 
 interface DoctorViewProps {
   data: DoctorDashboardData;
@@ -48,40 +44,8 @@ interface DoctorViewProps {
   onRejectSubstitution: (caseId: string, notes: string) => Promise<void>;
   onCosignOrder: (simId: string, reason: string) => Promise<void>;
   onRunScenario: (scenarioId: number) => Promise<SixAgentResult>;
-  onEvaluateSandbox: (drugName: string) => Promise<PairSeverityAdvisoryResult>;
   onOpenPatientHistory: (patientId: string) => void;
   onOpenLabSource: (reportId: string) => void;
-}
-
-const COMMON_DRUGS = [
-  // Keep suggestions to model-recognized ingredient names. Dose and route are
-  // entered separately and are not model features.
-  "Warfarin",
-  "Fluconazole",
-  "Enoxaparin",
-  "Lisinopril",
-  "Enalapril",
-  "Digoxin",
-  "Amiodarone",
-  "Atorvastatin",
-  "Micafungin",
-  "Heparin",
-  "Ciprofloxacin",
-  "Acetylsalicylic acid",
-  "Clopidogrel",
-  "Spironolactone",
-];
-
-const MODEL_NAME_ALIASES: Record<string, string> = {
-  "enoxaparin sodium (lovenox) 80mg sc daily": "Enoxaparin",
-  "clexane (enoxaparin) 80mg sc daily": "Enoxaparin",
-  "enoxaparin sodium (lovenox)": "Enoxaparin",
-  "clexane (enoxaparin)": "Enoxaparin",
-};
-
-function modelDrugName(name: string): string {
-  const trimmed = name.trim();
-  return MODEL_NAME_ALIASES[trimmed.toLocaleLowerCase().replace(/\s+/g, " ")] || trimmed;
 }
 
 export function DoctorView({
@@ -90,112 +54,23 @@ export function DoctorView({
   onRejectSubstitution,
   onCosignOrder,
   onRunScenario,
-  onEvaluateSandbox,
   onOpenPatientHistory,
   onOpenLabSource,
 }: DoctorViewProps) {
   const { showToast } = useToast();
 
-  // Prescribing sandbox multi-drug state
-  const [prescribedDrugs, setPrescribedDrugs] = React.useState<{ id: string; name: string; dose: string }[]>([]);
-  const [currentDrugInput, setCurrentDrugInput] = React.useState("");
-  const [currentDoseInput, setCurrentDoseInput] = React.useState("");
-  const [sandboxEvaluating, setSandboxEvaluating] = React.useState(false);
-  const [drugSuggestions, setDrugSuggestions] = React.useState<string[]>([]);
-
   // Active AI evaluation result
   const [evaluationResult, setEvaluationResult] = React.useState<SixAgentResult | null>(null);
-  const [advisoryResult, setAdvisoryResult] = React.useState<PairSeverityAdvisoryResult | null>(null);
   const [activeScenarioId] = React.useState<number | null>(null);
+  const [reviewedDdiPair, setReviewedDdiPair] = React.useState<[DdiReviewDrug, DdiReviewDrug] | null>(null);
+  const reviewedDdiEvidence = reviewedDdiPair
+    ? findDdiRuleExample(reviewedDdiPair[0], reviewedDdiPair[1])
+    : undefined;
 
   // Substitution action state
   const [processingSubId, setProcessingSubId] = React.useState<string | null>(null);
   const [processingCosignId, setProcessingCosignId] = React.useState<string | null>(null);
-
-  const handleDrugInput = (val: string) => {
-    setCurrentDrugInput(val);
-    if (val.trim().length > 1) {
-      const q = val.toLowerCase();
-      setDrugSuggestions(COMMON_DRUGS.filter((d) => d.toLowerCase().includes(q)));
-    } else {
-      setDrugSuggestions([]);
-    }
-  };
-
-  const handleAddDrug = (nameToAdd?: string, doseToAdd?: string) => {
-    const rawName = (nameToAdd || currentDrugInput).trim();
-    if (!rawName) return;
-
-    // Support comma or plus separated names without mixing dose/route text into the model input.
-    const splitNames = rawName.includes("+")
-      ? rawName.split("+").map((s) => s.trim()).filter(Boolean)
-      : rawName.includes(",")
-      ? rawName.split(",").map((s) => s.trim()).filter(Boolean)
-      : [rawName];
-
-    const newItems = splitNames.map((n, i) => {
-      return {
-        id: `drug-${Date.now()}-${i}`,
-        name: n,
-        dose: doseToAdd || currentDoseInput || "Dose not specified",
-      };
-    });
-
-    setPrescribedDrugs((prev) => [...prev, ...newItems]);
-    setCurrentDrugInput("");
-    setDrugSuggestions([]);
-    showToast(`Added ${newItems.length > 1 ? `${newItems.length} medications` : newItems[0].name} to prescription regimen.`, "info");
-  };
-
-  const handleRemoveDrug = (id: string) => {
-    setPrescribedDrugs((prev) => {
-      const filtered = prev.filter((d) => d.id !== id);
-      if (filtered.length === 0) {
-        showToast("Removed medication. Regimen is now empty.", "info");
-      }
-      return filtered;
-    });
-  };
-
-  const handleEvaluateSandboxClick = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const allDrugs = [...prescribedDrugs];
-    if (currentDrugInput.trim()) {
-      allDrugs.push({
-        id: `drug-${Date.now()}`,
-        name: currentDrugInput.trim(),
-        dose: currentDoseInput || "Dose not specified",
-      });
-      setPrescribedDrugs(allDrugs);
-      setCurrentDrugInput("");
-      setDrugSuggestions([]);
-    }
-
-    if (allDrugs.length !== 2) {
-      showToast("The severity advisory accepts exactly two drug names.", "warning");
-      return;
-    }
-
-    const modelNames = allDrugs.map((drug) => modelDrugName(drug.name));
-    if (modelNames[0].toLocaleLowerCase() === modelNames[1].toLocaleLowerCase()) {
-      showToast("Both entries refer to the same active ingredient. Choose two different drugs for a pair advisory.", "warning");
-      return;
-    }
-
-    setSandboxEvaluating(true);
-    try {
-      const combinedNames = modelNames.join(" + ");
-      const res = await onEvaluateSandbox(combinedNames);
-      setAdvisoryResult(res);
-      setEvaluationResult(null);
-      showToast("Severity advisory received from the backend.", "success");
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "Failed to evaluate prescription", "error");
-    } finally {
-      setSandboxEvaluating(false);
-    }
-  };
+  const [demoCosignedOrders, setDemoCosignedOrders] = React.useState<PendingCosignItem[]>([]);
 
   const handleApproveSub = async (requestId: string) => {
     setProcessingSubId(requestId);
@@ -222,10 +97,13 @@ export function DoctorView({
   };
 
   const handleCosignClick = async (simId: string) => {
+    const order = data.pending_cosigns.find((item) => item.simulation_id === simId);
+    if (!order) return;
     setProcessingCosignId(simId);
     try {
       await onCosignOrder(simId, "Physician decision recorded after review.");
-      showToast("Order decision recorded by the backend.", "success");
+      setDemoCosignedOrders((current) => [order, ...current]);
+      showToast("Demo co-sign recorded for this screen session only. No backend order was changed.", "info");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Could not record the co-sign.", "error");
     } finally {
@@ -391,7 +269,7 @@ export function DoctorView({
                 Mandatory Physician Co-Sign Queue
               </h2>
               <p className="text-xs text-slate-500">
-                High-potency clinical adjustments requiring attending clinician authorization.
+                Demo workflow: co-sign actions update this screen only; no real order is authorized or changed.
               </p>
             </div>
           </div>
@@ -402,7 +280,7 @@ export function DoctorView({
 
         {data.pending_cosigns.length === 0 ? (
           <div className="py-8 text-center text-slate-400 text-sm font-medium">
-            ✓ All high-risk clinical orders have been signed and authorized.
+            No pending demo co-sign actions in this session.
           </div>
         ) : (
           <div className="space-y-4 pt-4">
@@ -451,252 +329,70 @@ export function DoctorView({
                     className="text-xs font-bold gap-1.5 shadow-xs"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    Co-Sign &amp; Authorize Action
+                    Record Demo Co-Sign
                   </Button>
                 </div>
               </div>
             ))}
           </div>
         )}
+        {demoCosignedOrders.length > 0 && (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4">
+            <h3 className="text-xs font-bold uppercase tracking-wide text-emerald-900">Completed in this session</h3>
+            <div className="mt-2 space-y-2">
+              {demoCosignedOrders.map((order) => (
+                <div key={order.simulation_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs">
+                  <span className="font-semibold text-slate-800">{order.case_id} · {order.proposed_action}</span>
+                  <span className="font-medium text-emerald-800">Co-sign recorded</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* SIDE-BY-SIDE: CLINICAL CASES & PRESCRIBING WORKSTATION */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: persisted findings (5 cols) */}
+        {/* Left: source-linked interaction findings (5 cols) */}
         <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <AlertTriangle className="w-4 h-4 text-indigo-600" />
               <h2 className="font-heading text-base font-bold text-slate-900 tracking-tight">
-                Persisted Clinical Findings
+                Documented Interaction Findings
               </h2>
             </div>
             <p className="text-xs text-slate-500 mb-4">
-              Findings recorded in the connected backend. Review the patient history for supporting records.
+              Source-linked medication interaction references for clinician review.
             </p>
 
             <div className="space-y-3">
-              {data.active_findings.length === 0 ? <p className="rounded-lg bg-slate-50 p-4 text-xs text-slate-500">No findings are recorded by the backend.</p> : data.active_findings.map((finding) => (
-                <button key={finding.id} type="button" onClick={() => onOpenPatientHistory(finding.patient_id)} className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-left hover:border-slate-300">
-                  <div className="flex items-center justify-between gap-2"><strong className="text-xs text-slate-900">{finding.title}</strong><span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">{finding.severity}</span></div>
-                  <p className="mt-1 text-[11px] text-slate-600">{finding.description || "No description recorded."}</p>
-                  <span className="mt-2 block text-[10px] font-mono text-slate-500">Patient record: {finding.patient_id}</span>
-                </button>
-              ))}
+              {!reviewedDdiPair ? (
+                <p className="rounded-lg bg-slate-50 p-4 text-xs text-slate-500">Select a medicine pair and run the review to load matching source findings.</p>
+              ) : reviewedDdiEvidence ? (
+                <article className="rounded-xl border border-slate-200 bg-slate-50 p-3.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="text-xs text-slate-900">{reviewedDdiPair[0]} + {reviewedDdiPair[1]}</strong>
+                    <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-800">Source-linked</span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-600">{reviewedDdiEvidence.summary}</p>
+                  <a className="mt-2 inline-block text-[10px] font-semibold text-blue-700 underline" href={reviewedDdiEvidence.url} target="_blank" rel="noreferrer">
+                    View {reviewedDdiEvidence.source}
+                  </a>
+                </article>
+              ) : (
+                <p className="rounded-lg bg-slate-50 p-4 text-xs text-slate-500">No curated source rule matched {reviewedDdiPair[0]} + {reviewedDdiPair[1]}. This does not establish that the pair has no interaction.</p>
+              )}
             </div>
           </div>
 
           <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] text-slate-400">
-            This panel displays persisted records and does not create or validate clinical findings.
+            References are not patient-specific assessments. Verify current labeling and clinical context.
           </div>
         </div>
 
-        {/* Right: Prescribing Sandbox Workstation (7 cols) */}
-        <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs">
-          <div className="flex items-center gap-2 mb-1">
-            <Activity className="w-4 h-4 text-blue-600" />
-            <h2 className="font-heading text-base font-bold text-slate-900 tracking-tight">
-              Interactive Prescribing Sandbox
-            </h2>
-          </div>
-          <p className="text-xs text-slate-500 mb-4">
-              Request a backend ML severity estimate for one drug pair. It does not determine whether the pair interacts or use patient context, dose, or route.
-          </p>
-
-          <form onSubmit={handleEvaluateSandboxClick} className="space-y-4">
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              Advisory only: the model estimates severity only when an interaction is independently documented. It cannot establish interaction existence or clinical safety.
-            </div>
-
-            {/* CURRENT PRESCRIBED REGIMEN (CHIPS / TAGS) */}
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <Pill className="w-3.5 h-3.5 text-blue-600" />
-                  Prescribed Regimen ({prescribedDrugs.length} Medication{prescribedDrugs.length > 1 ? "s" : ""})
-                </span>
-                {prescribedDrugs.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setPrescribedDrugs([])}
-                    className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer"
-                  >
-                    Clear All
-                  </button>
-                )}
-              </div>
-
-              {prescribedDrugs.length === 0 ? (
-                <div className="py-2.5 text-center text-slate-400 text-xs italic">
-                  No medications added yet. Search and add drugs below to build your clinical regimen.
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  {prescribedDrugs.map((drug) => (
-                    <div
-                      key={drug.id}
-                      className="inline-flex items-center gap-2 pl-2.5 pr-1.5 py-1 rounded-lg bg-white border border-blue-200/80 text-xs shadow-2xs group hover:border-blue-300 transition-colors"
-                    >
-                      <span className="font-bold text-slate-900">{drug.name}</span>
-                      <span className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-100">
-                        {drug.dose}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveDrug(drug.id)}
-                        className="w-4 h-4 rounded-full text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition-colors cursor-pointer"
-                        title={`Remove ${drug.name}`}
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* PRESCRIBE DRUG INPUT WITH INTELLIGENT AUTOCOMPLETE */}
-            <div className="relative">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Drug Name / Active Ingredient (Suggestions use known model names)
-              </label>
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1">
-                  <Input
-                    type="text"
-                    value={currentDrugInput}
-                    onChange={(e) => handleDrugInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddDrug();
-                      }
-                    }}
-                    placeholder="Type drug name (or multiple e.g. Warfarin, Fluconazole)..."
-                    className="text-xs font-medium pr-8"
-                  />
-                  {currentDrugInput && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCurrentDrugInput("");
-                        setDrugSuggestions([]);
-                      }}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-                <Button
-                  type="button"
-                  onClick={() => handleAddDrug()}
-                  disabled={!currentDrugInput.trim()}
-                  className="h-9 px-3.5 text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white gap-1 shrink-0"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Add Drug
-                </Button>
-              </div>
-
-              {/* Intelligent Suggestions Dropdown */}
-              {drugSuggestions.length > 0 && (
-                <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden divide-y divide-slate-100 max-h-56 overflow-y-auto">
-                  <div className="px-3 py-1.5 bg-slate-50 text-[10px] font-extrabold uppercase tracking-wider text-slate-500 flex items-center justify-between">
-                    <span>Intelligent Suggestions (Click to Add)</span>
-                    <span className="text-blue-600 font-bold">{drugSuggestions.length} Matches</span>
-                  </div>
-                  {drugSuggestions.map((sug, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => handleAddDrug(sug)}
-                      className="w-full text-left px-3.5 py-2 text-xs hover:bg-blue-50 text-slate-800 font-medium flex items-center justify-between transition-colors cursor-pointer group"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Pill className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600" />
-                        <span className="group-hover:text-blue-900 font-semibold">{sug}</span>
-                      </div>
-                      <span className="text-[10px] font-bold text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                        + Add to Regimen
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Dosage & Frequency for Next Drug */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Dosage, Route &amp; Frequency (for Added Medication)
-                </label>
-                <span className="text-[11px] text-slate-400">Customizable per medication</span>
-              </div>
-              <Input
-                type="text"
-                value={currentDoseInput}
-                onChange={(e) => setCurrentDoseInput(e.target.value)}
-                placeholder="e.g. 5 mg PO Daily"
-                className="text-xs font-medium"
-              />
-            </div>
-
-            {/* Quick Dose Pills */}
-            <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-              <span className="text-[11px] font-bold text-slate-400">Quick Dose Presets:</span>
-              {["2.5 mg PO Daily", "5 mg PO Daily", "10 mg PO Daily", "200 mg PO Daily", "80 mg SC Daily"].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setCurrentDoseInput(preset)}
-                  className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition-colors cursor-pointer"
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-
-            {/* Evaluation Submit Button */}
-            <Button
-              type="submit"
-              disabled={sandboxEvaluating || prescribedDrugs.length + (currentDrugInput.trim() ? 1 : 0) !== 2}
-              className="w-full h-11 text-xs font-bold uppercase tracking-wider bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20"
-            >
-              {sandboxEvaluating
-                ? "Requesting backend estimate..."
-                : `Get Pair Severity Advisory (${prescribedDrugs.length} Medication${
-                    (prescribedDrugs.length || 1) > 1 ? "s" : ""
-                  } in Regimen)`}
-            </Button>
-          </form>
-        </div>
+        <DeterministicDdiReview onReviewComplete={setReviewedDdiPair} />
       </div>
-
-      {advisoryResult && (
-        <section className="rounded-2xl border border-amber-200 bg-white p-5 shadow-xs" aria-live="polite">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-amber-800">Backend ML severity advisory</p>
-              <h3 className="mt-1 text-lg font-bold text-slate-900">{advisoryResult.advisory.drug_a} + {advisoryResult.advisory.drug_b}</h3>
-              <p className="mt-1 text-sm text-slate-700">{advisoryResult.notice}</p>
-            </div>
-            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">
-              {advisoryResult.advisory.display_severity} · {advisoryResult.advisory.display_severity_source}
-            </span>
-          </div>
-          <p className="mt-2 text-xs text-slate-600">{advisoryResult.advisory.explanation_text}</p>
-          <div className="mt-3 flex flex-wrap gap-2 text-xs">
-            {Object.entries(advisoryResult.advisory.probabilities).map(([label, probability]) => (
-              <span key={label} className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1">{label}: {(probability * 100).toFixed(1)}%</span>
-            ))}
-          </div>
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-600">
-            {advisoryResult.advisory.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}
-          </ul>
-        </section>
-      )}
 
       {/* SECTION: EXPLAINABLE AI (XAI) EVALUATION CONTAINER */}
       {evaluationResult && (

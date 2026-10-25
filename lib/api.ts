@@ -36,6 +36,7 @@ async function fetchWithFallback<T>(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10000);
   const fullUrl = url.startsWith("http") ? url : `${API_BASE_URL}${url}`;
+  let responseReceived = false;
   try {
     const res = await fetch(fullUrl, {
       ...options,
@@ -47,6 +48,9 @@ async function fetchWithFallback<T>(
       },
       signal: controller.signal,
     });
+    // A 401/403 still confirms the API responded. A 404 can mean the
+    // deployment is calling its own frontend host instead of the backend.
+    responseReceived = res.status !== 404 && res.status < 500;
     const payload = await res.json().catch(() => null);
     if (!res.ok) {
       const detail = payload?.detail || payload?.message || `Request failed (${res.status})`;
@@ -55,7 +59,9 @@ async function fetchWithFallback<T>(
     isBackendReachable = true;
     return { data: payload as T, isLive: true };
   } catch (error) {
-    isBackendReachable = false;
+    // HTTP errors (including 401/403) prove the API is reachable; only a
+    // network/timeout failure should show the API as unavailable.
+    isBackendReachable = responseReceived;
     throw error;
   } finally {
     clearTimeout(timeoutId);

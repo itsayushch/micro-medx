@@ -17,8 +17,8 @@ import {
   SixAgentResult,
 } from "@/lib/types";
 import {
-  apiEvaluatePrescription,
   apiGetDoctorDashboard,
+  isLiveBackendAvailable,
 } from "@/lib/api";
 import { DETERMINISTIC_PATIENT_HISTORIES, DEMO_SCENARIO_RESULTS, LAB_REPORTS } from "@/lib/mock-data";
 import {
@@ -137,8 +137,8 @@ function DashboardApp() {
       });
       setIsLiveApi(result.isLive);
     } catch {
-      // Dashboard demo data remains available when the findings service is offline.
-      setIsLiveApi(false);
+      // Keep demo content available; distinguish authorization errors from outages.
+      setIsLiveApi(isLiveBackendAvailable());
     } finally {
       setLoading(false);
     }
@@ -254,8 +254,15 @@ function DashboardApp() {
   };
 
   const handleCosignOrder = async (simId: string, reason: string) => {
-    void simId; void reason;
-    showToast("Demo co-sign recorded for this screen only; no backend record was changed.", "info");
+    void reason;
+    setDoctorData((current) => current ? {
+      ...current,
+      pending_cosigns: current.pending_cosigns.filter((item) => item.simulation_id !== simId),
+      stats: {
+        ...current.stats,
+        pending_cosigns_count: Math.max(0, current.stats.pending_cosigns_count - 1),
+      },
+    } : current);
   };
 
   const handleDispenseMedication = async (item: AvailabilityQueueItem) => {
@@ -303,11 +310,6 @@ function DashboardApp() {
     return result;
   };
 
-  const handleEvaluateSandbox = async (drugName: string) => {
-    const res = await apiEvaluatePrescription("", drugName, "");
-    return res.data;
-  };
-
   return (
     <div className="flex h-screen overflow-hidden bg-[#F8FAFC]">
       {/* Mobile Backdrop */}
@@ -349,58 +351,7 @@ function DashboardApp() {
 
         <main className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6">
           {/* Workspace Hero Header */}
-          <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="space-y-1.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200/80 font-poppins">
-                  <Activity className="w-3 h-3 text-blue-600" />
-                  {activeRole} Active Service
-                </span>
-              </div>
 
-              <h1 className="font-heading text-xl md:text-2xl font-bold tracking-tight text-slate-900 font-poppins">
-                {roleGreeting[activeRole]}
-              </h1>
-
-              <p className="text-sm text-slate-500 max-w-3xl leading-relaxed font-quicksand">
-                {activeRole === "Doctor" &&
-                  "Demo workspace with live persisted clinical findings and the interactive severity advisory."}
-                {activeRole === "Nurse" &&
-                  "Static demo workspace. Medication records, administration events, and observations are examples only."}
-                {activeRole === "Clinical Pharmacist" &&
-                  "Static demo workspace. Prescription, substitution, and inventory records are examples only."}
-                {activeRole === "Administrator" &&
-                  "Static demo workspace. Directory and audit-chain content are examples; no live verification is performed."}
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto shrink-0">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => dossierPatientIdentifier && handleOpenPatientHistory(dossierPatientIdentifier)}
-                disabled={!dossierPatientIdentifier}
-                className="text-xs font-bold text-slate-700 border-slate-200 hover:bg-slate-50 gap-1.5 h-9 font-poppins cursor-pointer"
-              >
-                <Users className="w-3.5 h-3.5 text-blue-600" />
-                Patient Dossier
-              </Button>
-
-              <Button
-                variant="default"
-                size="sm"
-                onClick={handleVerifyChain}
-                className="text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white gap-1.5 h-9 font-poppins cursor-pointer shadow-2xs"
-              >
-                <Lock className="w-3.5 h-3.5 text-emerald-400" />
-                Verify Audit Chain
-              </Button>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-xs text-sky-900">
-            Demo mode: dashboard workflows and records are static examples. Only persisted clinical findings and the severity sandbox use the backend.
-          </div>
 
           {/* LOADING OR ROLE VIEW */}
           {!sessionReady || loading ? (
@@ -417,7 +368,6 @@ function DashboardApp() {
                   onRejectSubstitution={handleRejectDoctorSub}
                   onCosignOrder={handleCosignOrder}
                   onRunScenario={handleRunScenario}
-                  onEvaluateSandbox={handleEvaluateSandbox}
                   onOpenPatientHistory={handleOpenPatientHistory}
                   onOpenLabSource={handleOpenLabSource}
                 />
