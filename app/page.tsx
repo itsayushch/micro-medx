@@ -16,7 +16,6 @@ import {
   RoleType,
   SixAgentResult,
 } from "@/lib/types";
-import { CLINICAL_PERSONAS } from "@/lib/mock-data";
 import {
   apiCosignOrder,
   apiDispenseMedication,
@@ -69,10 +68,10 @@ import { ReAuthModal } from "@/components/modals/ReAuthModal";
 
 function DashboardApp() {
   const router = useRouter();
-  const { currentUser, activeRole, isAuthenticated, login, logout, switchRole } = useAuth();
+  const { currentUser, activeRole, isAuthenticated, sessionReady, login, logout, switchRole } = useAuth();
   const { showToast } = useToast();
 
-  const [isLiveApi, setIsLiveApi] = React.useState(true);
+  const [isLiveApi, setIsLiveApi] = React.useState(false);
 
   // Dashboards data
   const [doctorData, setDoctorData] = React.useState<DoctorDashboardData | null>(null);
@@ -80,6 +79,7 @@ function DashboardApp() {
   const [pharmacistData, setPharmacistData] = React.useState<PharmacistDashboardData | null>(null);
   const [adminData, setAdminData] = React.useState<AdminDashboardData | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [dashboardError, setDashboardError] = React.useState<string | null>(null);
 
   // Re-Authentication on Role Transition (Doctor <-> Nurse)
   const [pendingRoleSwitch, setPendingRoleSwitch] = React.useState<{ from: RoleType; to: RoleType } | null>(null);
@@ -110,34 +110,49 @@ function DashboardApp() {
   const [selectedVitalItem, setSelectedVitalItem] = React.useState<NurseVitalLabItem | null>(null);
   const [isVitalModalOpen, setIsVitalModalOpen] = React.useState(false);
 
-  const persona = CLINICAL_PERSONAS[activeRole] || CLINICAL_PERSONAS["Doctor"];
+  const roleGreeting: Record<RoleType, string> = {
+    Doctor: "Clinical Review Workspace",
+    Nurse: "Patient Monitoring Workspace",
+    "Clinical Pharmacist": "Pharmacy Review Workspace",
+    Administrator: "System Governance Workspace",
+  };
+  const dossierPatientIdentifier = doctorData?.inpatients[0]?.id ||
+    nurseData?.patients?.[0]?.patient_identifier ||
+    pharmacistData?.availability_queue[0]?.patient_identifier ||
+    adminData?.patients[0]?.id || "";
 
-  // Fetch all dashboard datasets
+  // Request only the authenticated role's dashboard; nonmatching role routes
+  // intentionally return 403 and are not needed by this workspace.
   const loadAllDashboards = React.useCallback(async () => {
+    if (!isAuthenticated) return;
+    setLoading(true);
+    setDashboardError(null);
     try {
-      const [docRes, nurseRes, pharmRes, adminRes] = await Promise.all([
-        apiGetDoctorDashboard(),
-        apiGetNurseDashboard(),
-        apiGetPharmacistDashboard(),
-        apiGetAdminDashboard(),
-      ]);
-
-      setDoctorData(docRes.data);
-      setNurseData(nurseRes.data);
-      setPharmacistData(pharmRes.data);
-      setAdminData(adminRes.data);
-
-      setIsLiveApi(docRes.isLive || nurseRes.isLive || pharmRes.isLive || adminRes.isLive);
+      setDoctorData(null); setNurseData(null); setPharmacistData(null); setAdminData(null);
+      if (activeRole === "Doctor") { const result = await apiGetDoctorDashboard(); setDoctorData(result.data); setIsLiveApi(result.isLive); }
+      else if (activeRole === "Nurse") { const result = await apiGetNurseDashboard(); setNurseData(result.data); setIsLiveApi(result.isLive); }
+      else if (activeRole === "Clinical Pharmacist") { const result = await apiGetPharmacistDashboard(); setPharmacistData(result.data); setIsLiveApi(result.isLive); }
+      else { const result = await apiGetAdminDashboard(); setAdminData(result.data); setIsLiveApi(result.isLive); }
     } catch (err) {
-      console.error("Dashboard data load error:", err);
+      setIsLiveApi(false);
+      setDashboardError(err instanceof Error ? err.message : "Could not load dashboard from the backend.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeRole, isAuthenticated]);
 
   React.useEffect(() => {
-    loadAllDashboards();
-  }, [loadAllDashboards]);
+    let cancelled = false;
+    if (!sessionReady) return;
+    if (!isAuthenticated) { router.replace("/signin"); return; }
+    const timer = window.setTimeout(() => {
+      if (!cancelled) void loadAllDashboards();
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [sessionReady, isAuthenticated, loadAllDashboards, router]);
 
   const handleLogoutClick = async () => {
     await logout();
@@ -159,21 +174,17 @@ function DashboardApp() {
       return;
     }
 
-    switchRole(targetRole);
-    showToast(`Switched to ${targetRole} Workspace`, "info");
+    void switchRole(targetRole).then(() => {
+      showToast(`Switched to ${targetRole} Workspace`, "info");
+    }).catch((error) => showToast(error instanceof Error ? error.message : "Role switch failed", "error"));
   };
 
   const handleConfirmReAuth = async (targetRole: RoleType, phone: string, pass: string) => {
-    try {
-      const success = await login(targetRole, phone, pass);
-      if (success) {
-        setIsReAuthModalOpen(false);
-        setPendingRoleSwitch(null);
-        showToast(`Re-authenticated as ${targetRole}. Workspace unlocked.`, "success");
-        await loadAllDashboards();
-      }
-    } catch {
-      showToast("Authentication failed. Please verify passcode.", "error");
+    const success = await login(targetRole, phone, pass);
+    if (success) {
+      setIsReAuthModalOpen(false);
+      setPendingRoleSwitch(null);
+      showToast(`Re-authenticated as ${targetRole}.`, "success");
     }
   };
 
@@ -231,46 +242,51 @@ function DashboardApp() {
   };
 
   // Async action handlers
-  const handleApproveDoctorSub = async (caseId: string, notes: string) => {
-    await apiSubmitDoctorSubstitutionDecision(caseId, "APPROVED", notes, currentUser?.name);
+  const handleApproveDoctorSub = async (requestId: string, notes: string) => {
+    const result = await apiSubmitDoctorSubstitutionDecision(requestId, "APPROVED", notes);
+    if (!result.success) throw new Error(result.message || "The substitution decision was not recorded.");
     await loadAllDashboards();
   };
 
-  const handleRejectDoctorSub = async (caseId: string, notes: string) => {
-    await apiSubmitDoctorSubstitutionDecision(caseId, "REJECTED", notes, currentUser?.name);
+  const handleRejectDoctorSub = async (requestId: string, notes: string) => {
+    const result = await apiSubmitDoctorSubstitutionDecision(requestId, "REJECTED", notes);
+    if (!result.success) throw new Error(result.message || "The substitution decision was not recorded.");
     await loadAllDashboards();
   };
 
   const handleCosignOrder = async (simId: string, reason: string) => {
-    await apiCosignOrder(simId, "approved", currentUser?.name, reason);
+    const result = await apiCosignOrder(simId, "approved", currentUser?.name || "", reason);
+    if (!result.success) throw new Error(result.message || "The co-sign decision was not recorded.");
     await loadAllDashboards();
   };
 
-  const handleDispenseMedication = async (caseId: string) => {
-    await apiDispenseMedication(caseId, currentUser?.name);
-    showToast(`Case ${caseId} marked ready for dispensing and sealed on SHA-256 ledger.`, "success");
+  const handleDispenseMedication = async (item: AvailabilityQueueItem) => {
+    const result = await apiDispenseMedication(item, currentUser?.name || "", "Inventory and dispensing verification requested.");
+    if (!result.success) throw new Error(result.message || "Dispensing verification was not recorded.");
     await loadAllDashboards();
   };
 
   const handleSubmitSubstitution = async (
-    caseId: string,
+    item: AvailabilityQueueItem,
     suggestedBrand: string,
     reason: string,
-    notes: string
+    notes: string,
+    idempotencyKey: string
   ) => {
-    await apiSubmitSubstitutionRequest(caseId, suggestedBrand, reason, notes, currentUser?.name);
-    showToast(`Substitution request submitted to doctor for ${caseId}`, "success");
+    const result = await apiSubmitSubstitutionRequest(item, suggestedBrand, reason, notes, idempotencyKey);
+    if (!result.success) throw new Error(result.message || "The substitution request was not recorded.");
+    showToast(result.message, "success");
     await loadAllDashboards();
   };
 
   const handleMARAction = async (
     orderId: string,
-    action: "ADMINISTER" | "HOLD" | "REJECT",
-    notes: string,
-    vitalsChecked: boolean
+    action: "ADMINISTER" | "HOLD",
+    notes: string
   ) => {
-    await apiSubmitMARAction(orderId, action, notes, currentUser?.name, vitalsChecked);
-    showToast(`Medication order ${orderId} documented as ${action}.`, "success");
+    const result = await apiSubmitMARAction(orderId, action, notes);
+    if (!result.success) throw new Error(result.message || "The medication event was not recorded.");
+    showToast(result.message, "success");
     await loadAllDashboards();
   };
 
@@ -280,13 +296,14 @@ function DashboardApp() {
     value: string,
     unit: string
   ) => {
-    await apiRecordNurseVital(patientId, param, value, unit, currentUser?.name);
+    await apiRecordNurseVital(patientId, param, value, unit);
     await loadAllDashboards();
   };
 
   const handleVerifyChain = async () => {
-    await apiVerifyAuditChain();
+    const result = await apiVerifyAuditChain();
     await loadAllDashboards();
+    return { verified: result.verified, total_blocks: result.total_blocks, message: result.message };
   };
 
   const handleRunScenario = async (scenarioId: number): Promise<SixAgentResult> => {
@@ -295,13 +312,8 @@ function DashboardApp() {
     return res.data;
   };
 
-  const handleEvaluateSandbox = async (
-    patientId: string,
-    drugName: string,
-    dose: string
-  ): Promise<SixAgentResult> => {
-    const res = await apiEvaluatePrescription(patientId, drugName, dose);
-    await loadAllDashboards();
+  const handleEvaluateSandbox = async (drugName: string) => {
+    const res = await apiEvaluatePrescription("", drugName, "");
     return res.data;
   };
 
@@ -320,12 +332,14 @@ function DashboardApp() {
         activeRole={activeRole}
         onRoleChange={handleRoleSwitchRequest}
         currentUser={currentUser}
+        patientIdentifier={dossierPatientIdentifier}
         onLogout={handleLogoutClick}
         onOpenPatientHistory={handleOpenPatientHistory}
         onVerifyChain={handleVerifyChain}
         doctorPendingCount={doctorData?.stats.pending_cosigns_count || 0}
         nurseDueCount={nurseData?.stats.medications_due || 0}
         pharmacistShortageCount={pharmacistData?.stats.substitution_required || 0}
+        isLiveApi={isLiveApi}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -351,29 +365,21 @@ function DashboardApp() {
                   <Activity className="w-3 h-3 text-blue-600" />
                   {activeRole} Active Service
                 </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-poppins">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                  Offline CDS Verification Active
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                  <Lock className="w-3 h-3 text-slate-500" />
-                  SHA-256 Merkle Chain Sealed
-                </span>
               </div>
 
               <h1 className="font-heading text-xl md:text-2xl font-bold tracking-tight text-slate-900 font-poppins">
-                {persona.greeting}
+                {roleGreeting[activeRole]}
               </h1>
 
               <p className="text-sm text-slate-500 max-w-3xl leading-relaxed font-quicksand">
                 {activeRole === "Doctor" &&
-                  "Medication Safety & Prescribing Sandbox — Multi-drug interaction screening, deterministic risk evaluation, and co-signatures."}
+                  "Persisted patient records, substitution requests, rule findings, and clinician review."}
                 {activeRole === "Nurse" &&
-                  "Inpatient Medication Administration Record (MAR), bedside barcode scan verification, and rapid vital telemetry ingestion."}
+                  "Persisted medication records, administration events, and laboratory observations."}
                 {activeRole === "Clinical Pharmacist" &&
-                  "Medication Fulfillment & Substitution — Real-time bin stock checks, equivalent brand alternatives, and physician verification."}
+                  "Persisted prescription and substitution workflow. Inventory is untracked in the connected database."}
                 {activeRole === "Administrator" &&
-                  "Forensic SHA-256 Audit Trail — Cryptographic immutability checks, patient directory, and clinical governance."}
+                  "Database-backed patient directory and audit-chain verification."}
               </p>
             </div>
 
@@ -381,7 +387,8 @@ function DashboardApp() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => handleOpenPatientHistory("CASE-001")}
+                onClick={() => dossierPatientIdentifier && handleOpenPatientHistory(dossierPatientIdentifier)}
+                disabled={!dossierPatientIdentifier}
                 className="text-xs font-bold text-slate-700 border-slate-200 hover:bg-slate-50 gap-1.5 h-9 font-poppins cursor-pointer"
               >
                 <Users className="w-3.5 h-3.5 text-blue-600" />
@@ -395,16 +402,21 @@ function DashboardApp() {
                 className="text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white gap-1.5 h-9 font-poppins cursor-pointer shadow-2xs"
               >
                 <Lock className="w-3.5 h-3.5 text-emerald-400" />
-                Verify Ledger Chain
+                Verify Audit Chain
               </Button>
             </div>
           </div>
 
           {/* LOADING OR ROLE VIEW */}
-          {loading ? (
+          {!sessionReady || (loading && !dashboardError) ? (
             <div className="p-12 text-center text-slate-500">
               <div className="inline-block h-8 w-8 animate-spin rounded-full border-3 border-blue-600 border-r-transparent mb-3" />
               <div className="text-sm font-bold font-poppins">Initializing Clinical Workspaces &amp; Rules Engines...</div>
+            </div>
+          ) : dashboardError ? (
+            <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-800">
+              <strong>Backend data unavailable.</strong> {dashboardError}
+              <button className="ml-3 underline" onClick={() => void loadAllDashboards()}>Retry</button>
             </div>
           ) : (
             <>
@@ -454,14 +466,10 @@ function DashboardApp() {
           {/* Modern Clean Footer */}
           <footer className="pt-4 pb-2 border-t border-slate-200/60 text-xs text-slate-400 flex flex-wrap justify-between items-center gap-2">
             <div>
-              <strong className="text-slate-800 font-bold font-poppins">Micro MedX</strong> &bull; Clinical Decision Support &amp; Forensic SHA-256 Ledger Console
+              <strong className="text-slate-800 font-bold font-poppins">Micro MedX</strong> &bull; Clinical Decision Support connected to persisted backend records
             </div>
             <div className="flex items-center gap-3 text-[11px] font-medium font-mono text-slate-500">
-              <span>6-Agent AI Pipeline</span>
-              <span>&bull;</span>
-              <span>Deterministic Core</span>
-              <span>&bull;</span>
-              <span className="text-emerald-600 font-bold">Ledger Sealed</span>
+              <span>Backend-connected workspace</span>
             </div>
           </footer>
         </main>

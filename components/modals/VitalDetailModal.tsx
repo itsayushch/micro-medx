@@ -97,7 +97,7 @@ export function VitalDetailModal({
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 flex items-start gap-2.5 text-xs text-amber-900">
               <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
-                <strong className="font-bold">Clinical Flag:</strong> This value deviates from normal hospital inpatient thresholds and is flagged for physician review.
+                This stored measurement has not been clinically classified by the connected backend.
               </div>
             </div>
           )}

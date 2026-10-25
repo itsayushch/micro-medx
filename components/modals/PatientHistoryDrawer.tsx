@@ -41,14 +41,14 @@ export function PatientHistoryDrawer({
             <span className="text-xs font-mono font-bold bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
               {patientData.case_id}
             </span>
-            <span className="text-xs text-slate-500 font-medium">MRN: {patientData.mrn}</span>
-            <span className="text-xs text-slate-500 font-medium">Blood: {patientData.blood_group}</span>
+            <span className="text-xs text-slate-500 font-medium">MRN: {patientData.mrn || "Not recorded"}</span>
+            <span className="text-xs text-slate-500 font-medium">Blood: {patientData.blood_group || "Not recorded"}</span>
             <Badge variant="teal">Longitudinal EHR Record</Badge>
           </div>
           <div className="text-2xl font-black text-slate-900 flex items-center gap-2">
             {patientData.name}
             <span className="text-base text-slate-500 font-normal">
-              ({patientData.age}y &bull; {patientData.sex})
+              ({patientData.age == null ? "Age not recorded" : `${patientData.age}y`} &bull; {patientData.sex || "Sex not recorded"})
             </span>
           </div>
           <div className="flex items-center gap-4 text-xs text-slate-600 mt-1">
@@ -76,7 +76,7 @@ export function PatientHistoryDrawer({
                 <div className="absolute left-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-blue-600 ring-4 ring-white" />
                 <div className="flex-1 bg-slate-50 rounded-lg p-3 border border-slate-100">
                   <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-                    <span className="font-mono">{item.date}</span>
+                    <span className="font-mono">{item.date || "Not recorded"}</span>
                     <Badge variant="info" className="text-[10px] px-1.5 py-0">
                       {item.badge}
                     </Badge>
@@ -109,7 +109,7 @@ export function PatientHistoryDrawer({
                 {patientData.medical_conditions?.map((c, idx) => (
                   <tr key={idx} className="hover:bg-slate-50">
                     <td className="py-2.5 px-3 font-bold text-slate-900">{c.condition}</td>
-                    <td className="py-2.5 px-3 text-slate-500 font-mono">{c.diagnosis_date}</td>
+                    <td className="py-2.5 px-3 text-slate-500 font-mono">{c.diagnosis_date || "Not recorded"}</td>
                     <td className="py-2.5 px-3">
                       <Badge variant="success" className="text-[10px]">{c.status}</Badge>
                     </td>
@@ -144,7 +144,7 @@ export function PatientHistoryDrawer({
                     <td className="py-2.5 px-3 font-bold text-slate-900">{m.medication}</td>
                     <td className="py-2.5 px-3 text-slate-600">{m.strength} ({m.route})</td>
                     <td className="py-2.5 px-3 text-slate-500 font-mono text-[11px]">
-                      {m.start_date} &rarr; {m.end_date}
+                      {m.start_date || "Not recorded"} &rarr; {m.end_date || "Ongoing / not recorded"}
                     </td>
                     <td className="py-2.5 px-3">
                       <Badge
@@ -270,10 +270,10 @@ export function PatientHistoryDrawer({
           <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-400">
               <ShieldCheck className="h-4 w-4 text-emerald-400" />
-              7. Cryptographic SHA-256 Audit Trail (Patient Scope)
+              7. Patient-Scoped Audit Events
             </div>
             <Badge variant="teal" className="text-[10px] bg-emerald-950 text-emerald-300 border-emerald-800">
-              Immutable Chain Verified ✓
+              Backend audit events
             </Badge>
           </div>
           <div className="space-y-2 font-mono text-xs">
@@ -282,7 +282,7 @@ export function PatientHistoryDrawer({
                 <div className="space-y-0.5">
                   <div className="text-slate-400 text-[11px]">{ev.timestamp} &bull; {ev.user_role}</div>
                   <div className="text-slate-200 font-sans font-bold">{ev.action}</div>
-                  <div className="text-emerald-400 text-[11px]">Hash: {ev.audit_hash}</div>
+                  <div className="text-emerald-400 text-[11px]">Hash: {ev.audit_hash || "Not provided by backend"}</div>
                 </div>
                 <Badge variant="secondary" className="text-[10px] bg-slate-700 text-slate-200 border-none shrink-0">
                   {ev.event_type}

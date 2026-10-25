@@ -7,16 +7,19 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 interface SubstitutionRequestModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   item: AvailabilityQueueItem | null;
   onSubmit: (
-    caseId: string,
+    item: AvailabilityQueueItem,
     suggestedBrand: string,
     reason: string,
-    notes: string
+    notes: string,
+    idempotencyKey: string
   ) => Promise<void>;
 }
 
@@ -26,23 +29,22 @@ export function SubstitutionRequestModal({
   item,
   onSubmit,
 }: SubstitutionRequestModalProps) {
+  const { showToast } = useToast();
   const [selectedBrand, setSelectedBrand] = React.useState<string>("");
-  const [reason, setReason] = React.useState<string>(
-    "Original prescribed brand out-of-stock; suggested alternative is pharmaceutically and biologically equivalent."
-  );
+  const [reason, setReason] = React.useState<string>("");
   const [notes, setNotes] = React.useState<string>("");
   const [submitting, setSubmitting] = React.useState(false);
+  const idempotencyKey = React.useRef<string | null>(null);
 
-  React.useEffect(() => {
-    if (item && item.available_alternatives && item.available_alternatives.length > 0) {
-      setSelectedBrand(
-        `${item.available_alternatives[0].brand_name} (${item.available_alternatives[0].generic_name}) ${item.available_alternatives[0].strength}`
-      );
-    } else if (item) {
-      setSelectedBrand("Clexane (Enoxaparin Sodium) 80 mg / 0.8 mL");
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setSelectedBrand("");
+      setReason("");
+      setNotes("");
+      idempotencyKey.current = null;
     }
-    setNotes("");
-  }, [item]);
+    onOpenChange(nextOpen);
+  };
 
   if (!item) return null;
 
@@ -51,8 +53,12 @@ export function SubstitutionRequestModal({
     if (!selectedBrand) return;
     setSubmitting(true);
     try {
-      await onSubmit(item.case_id, selectedBrand, reason, notes);
-      onOpenChange(false);
+      idempotencyKey.current ||= crypto.randomUUID();
+      await onSubmit(item, selectedBrand, reason, notes, idempotencyKey.current);
+      idempotencyKey.current = null;
+      handleOpenChange(false);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "The request could not be recorded.", "error");
     } finally {
       setSubmitting(false);
     }
@@ -60,7 +66,7 @@ export function SubstitutionRequestModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent onClose={() => onOpenChange(false)} maxWidthClass="max-w-2xl">
+      <DialogContent onClose={() => handleOpenChange(false)} maxWidthClass="max-w-2xl">
         <form onSubmit={handleSubmit}>
           <DialogHeader className="bg-amber-50/70">
             <div className="flex items-center gap-2">
@@ -90,7 +96,7 @@ export function SubstitutionRequestModal({
                 <div className="p-3 bg-red-50/70 border border-red-200 rounded-lg">
                   <div className="text-[11px] font-bold text-red-700 uppercase">Original Prescribed</div>
                   <div className="text-sm font-bold text-slate-900 mt-0.5">{item.prescribed_medicine}</div>
-                  <div className="text-xs text-red-600 font-medium mt-1">Out of Stock (0 Available)</div>
+                    <div className="text-xs text-slate-600 font-medium mt-1">{item.available_qty_formatted || "Inventory status is not recorded"}</div>
                 </div>
 
                 <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-lg">
@@ -99,7 +105,7 @@ export function SubstitutionRequestModal({
                     <Pill className="h-4 w-4 text-emerald-600" />
                     {selectedBrand || "Select below"}
                   </div>
-                  <div className="text-xs text-emerald-700 font-medium mt-1">Verified In-Stock Equivalent</div>
+                    <div className="text-xs text-slate-600 font-medium mt-1">Proposed option requires prescriber review; equivalence is not verified here.</div>
                 </div>
               </div>
             </div>
@@ -109,31 +115,12 @@ export function SubstitutionRequestModal({
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 Suggested Formulary Alternative Brand *
               </label>
-              <Select
+              <Input
                 value={selectedBrand}
                 onChange={(e) => setSelectedBrand(e.target.value)}
+                placeholder="Enter the proposed product/brand for prescriber review"
                 required
-              >
-                {item.available_alternatives && item.available_alternatives.length > 0 ? (
-                  item.available_alternatives.map((alt, idx) => (
-                    <option
-                      key={idx}
-                      value={`${alt.brand_name} (${alt.generic_name}) ${alt.strength}`}
-                    >
-                      {alt.brand_name} ({alt.generic_name}) — {alt.strength} [{alt.stock}]
-                    </option>
-                  ))
-                ) : (
-                  <>
-                    <option value="Clexane (Enoxaparin Sodium) 80 mg / 0.8 mL">
-                      Clexane (Enoxaparin Sodium) 80 mg / 0.8 mL — 60 Syringes in Stock (Bin D-12)
-                    </option>
-                    <option value="Inhixa (Enoxaparin Sodium) 80 mg / 0.8 mL">
-                      Inhixa (Enoxaparin Sodium) 80 mg / 0.8 mL — 45 Syringes in Stock (Bin D-14)
-                    </option>
-                  </>
-                )}
-              </Select>
+              />
             </div>
 
             {/* Reason */}
@@ -141,17 +128,7 @@ export function SubstitutionRequestModal({
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 Clinical Rationale for Substitution *
               </label>
-              <Select value={reason} onChange={(e) => setReason(e.target.value)}>
-                <option value="Original prescribed brand out-of-stock; suggested alternative is pharmaceutically and biologically equivalent.">
-                  Prescribed brand out-of-stock; alternative is bioequivalent (Same active ingredient & strength)
-                </option>
-                <option value="Therapeutic substitution to hospital formulary contracted equivalent with verified safety profile.">
-                  Formulary preferred brand equivalent with identical pharmacokinetic profile
-                </option>
-                <option value="Emergency stock shortage; physician approval requested for immediate dose fulfillment.">
-                  Emergency stock exhaustion; urgent patient anticoagulation requirement
-                </option>
-              </Select>
+              <Textarea value={reason} onChange={(e) => setReason(e.target.value)} required rows={2} placeholder="Document the clinical reason for prescriber review. Do not imply equivalence unless independently verified." />
             </div>
 
             {/* Pharmacist Notes */}
@@ -172,7 +149,7 @@ export function SubstitutionRequestModal({
             <Button
               type="button"
               variant="secondary"
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleOpenChange(false)}
             >
               Cancel
             </Button>

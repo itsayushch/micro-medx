@@ -20,7 +20,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import { RoleType, UserSession } from "@/lib/types";
-import { CLINICAL_PERSONAS } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
 interface SidebarProps {
@@ -29,10 +28,12 @@ interface SidebarProps {
   currentUser: UserSession | null;
   onLogout: () => void;
   onOpenPatientHistory?: (patientId: string) => void;
+  patientIdentifier?: string;
   onVerifyChain?: () => void;
   doctorPendingCount?: number;
   nurseDueCount?: number;
   pharmacistShortageCount?: number;
+  isLiveApi?: boolean;
   isOpen?: boolean;
   onClose?: () => void;
 }
@@ -92,14 +93,15 @@ export function Sidebar({
   currentUser,
   onLogout,
   onOpenPatientHistory,
+  patientIdentifier,
   onVerifyChain,
   doctorPendingCount = 0,
   nurseDueCount = 0,
   pharmacistShortageCount = 0,
+  isLiveApi = false,
   isOpen = false,
   onClose,
 }: SidebarProps) {
-  const currentPersona = CLINICAL_PERSONAS[activeRole] || CLINICAL_PERSONAS["Doctor"];
 
   const getInitials = (name: string) => {
     return name
@@ -240,8 +242,9 @@ export function Sidebar({
           <div className="space-y-1">
             <button
               type="button"
+              disabled={!patientIdentifier}
               onClick={() => {
-                if (onOpenPatientHistory) onOpenPatientHistory("CASE-001");
+                if (onOpenPatientHistory && patientIdentifier) onOpenPatientHistory(patientIdentifier);
                 if (onClose) onClose();
               }}
               className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer text-left font-quicksand"
@@ -263,9 +266,9 @@ export function Sidebar({
             >
               <div className="flex items-center gap-2.5">
                 <Lock className="w-3.5 h-3.5 text-emerald-500" />
-                <span>SHA-256 Ledger Verifier</span>
+                <span>Audit Chain Verification</span>
               </div>
-              <span className="text-[10px] font-mono text-emerald-600 font-bold">100% OK</span>
+              <span className="text-[10px] font-mono text-slate-500 font-bold">Run check</span>
             </button>
           </div>
         </div>
@@ -276,21 +279,19 @@ export function Sidebar({
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 font-poppins">
               CDS Telemetry Engine
             </span>
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${isLiveApi ? "bg-emerald-500" : "bg-rose-500"}`}>
             </span>
           </div>
           <div className="text-[11px] font-medium text-slate-700 flex items-center justify-between">
-            <span>REST API:</span>
-            <span className="font-mono text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-1.5 py-0.2 rounded">
-              127.0.0.1:8000
+            <span>Backend API:</span>
+            <span className={`font-mono text-[10px] font-bold px-1.5 py-0.2 rounded ${isLiveApi ? "text-emerald-700 bg-emerald-100/70" : "text-rose-700 bg-rose-100/70"}`}>
+              {isLiveApi ? "Connected" : "Unavailable"}
             </span>
           </div>
           <div className="text-[11px] font-medium text-slate-700 flex items-center justify-between">
             <span>Audit State:</span>
             <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-100/70 px-1.5 py-0.2 rounded">
-              Immutable SHA-256
+              See audit status
             </span>
           </div>
         </div> */}
@@ -306,14 +307,14 @@ export function Sidebar({
                 ROLE_GRADIENTS[activeRole]
               )}
             >
-              {getInitials(currentUser?.name || currentPersona.name)}
+              {getInitials(currentUser?.name || activeRole)}
             </div>
             <div className="min-w-0">
               <div className="text-xs font-bold text-slate-900 truncate leading-tight font-poppins">
-                {currentUser?.name || currentPersona.name}
+                {currentUser?.name || "Authenticated user"}
               </div>
               <div className="text-[10px] font-medium text-slate-500 truncate font-quicksand">
-                {activeRole} &bull; St. Jude
+                {activeRole}{currentUser?.department ? ` • ${currentUser.department}` : ""}
               </div>
             </div>
           </div>

@@ -63,9 +63,12 @@ export function NurseView({
   const [marFilter, setMarFilter] = React.useState<"ALL" | "DUE" | "ADMINISTERED" | "HELD">("ALL");
   const [marSearch, setMarSearch] = React.useState("");
 
-  const [patientId, setPatientId] = React.useState("CASE-001");
+  const [selectedPatientId, setSelectedPatientId] = React.useState("");
+  const patientId = data.patients?.some((patient) => patient.patient_identifier === selectedPatientId)
+    ? selectedPatientId
+    : data.patients?.[0]?.patient_identifier || "";
   const [param, setParam] = React.useState("Blood Pressure");
-  const [value, setValue] = React.useState("124/80");
+  const [value, setValue] = React.useState("");
   const [unit, setUnit] = React.useState("mmHg");
   const [recording, setRecording] = React.useState(false);
 
@@ -74,13 +77,7 @@ export function NurseView({
   const handleParamChange = (newParam: string) => {
     setParam(newParam);
     setUnit(PARAMETER_UNITS[newParam] || "");
-    if (newParam === "Blood Pressure") setValue("120/80");
-    else if (newParam === "Heart Rate") setValue("72");
-    else if (newParam === "SpO₂") setValue("98");
-    else if (newParam === "Temperature") setValue("98.6");
-    else if (newParam === "Serum Creatinine") setValue("1.1");
-    else if (newParam === "Blood Glucose") setValue("105");
-    else if (newParam === "Prothrombin Time (INR)") setValue("2.1");
+    setValue("");
   };
 
   const handleRecordVitalSubmit = async (e: React.FormEvent) => {
@@ -90,8 +87,8 @@ export function NurseView({
     try {
       await onRecordVital(patientId, param, value, unit);
       showToast(`${param} recorded for ${patientId}: ${value} ${unit}`, "success");
-    } catch (err: any) {
-      showToast(err.message || "Failed to record vital", "error");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to record vital", "error");
     } finally {
       setRecording(false);
     }
@@ -128,20 +125,20 @@ export function NurseView({
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
         <MetricCard
           title="Medications Due"
-          value={data.stats.medications_due}
-          change={data.stats.medications_due > 0 ? "Due Now" : "0"}
-          trend={data.stats.medications_due > 0 ? "down" : "up"}
-          hint="Scheduled within 30m"
+          value={data.stats.medications_due ?? "Not scheduled"}
+          change={data.stats.medications_due === null ? "Schedule unavailable" : `${data.stats.medications_due} due`}
+          trend="neutral"
+          hint="No administration schedule is stored"
           icon={<Clock className="w-4 h-4" />}
           variant="warning"
         />
 
         <MetricCard
-          title="Administered Today"
+          title="Recorded Administered"
           value={data.stats.medications_administered}
-          change="+18"
-          trend="up"
-          hint="Barcode verified doses"
+          change="Persisted events"
+          trend="neutral"
+          hint="The API does not filter these records by date"
           icon={<CheckCircle2 className="w-4 h-4" />}
           variant="success"
         />
@@ -159,8 +156,8 @@ export function NurseView({
         <MetricCard
           title="Vitals Recorded"
           value={data.stats.vitals_recorded}
-          change="+4"
-          trend="up"
+          change="Persisted records"
+          trend="neutral"
           hint="Bedside observations"
           icon={<HeartPulse className="w-4 h-4" />}
           variant="teal"
@@ -171,7 +168,7 @@ export function NurseView({
           value={data.stats.attention_required}
           change={data.stats.attention_required > 0 ? "Flagged" : "Normal"}
           trend={data.stats.attention_required > 0 ? "down" : "up"}
-          hint="Out-of-range parameters"
+          hint="High-severity findings returned by the backend"
           icon={<AlertCircle className="w-4 h-4" />}
           variant="default"
           className="col-span-2 sm:col-span-1"
@@ -190,7 +187,7 @@ export function NurseView({
                 eMAR — Electronic Medication Administration Record
               </h2>
               <p className="text-xs text-slate-500">
-                Inpatient schedule with 2D wristband barcode validation and strict deterministic safety checks.
+                Medication records are persisted, but this database does not contain a timed administration schedule or barcode-validation state.
               </p>
             </div>
           </div>
@@ -238,6 +235,11 @@ export function NurseView({
 
         {/* MAR Schedule Table */}
         <div className="pt-4">
+          {!data.mar_schedule_available && data.mar_schedule_note && (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              {data.mar_schedule_note} Medication records below are not administration instructions.
+            </div>
+          )}
           <Table>
             <TableHeader>
               <TableRow className="bg-slate-50/80">
@@ -262,7 +264,14 @@ export function NurseView({
                   <TableRow key={idx}>
                     <TableCell className="font-mono font-bold text-slate-900">{m.scheduled_time}</TableCell>
                     <TableCell>
-                      <div className="font-bold text-slate-900">{m.patient_name}</div>
+                      <button
+                        type="button"
+                        className="font-bold text-blue-700 hover:underline disabled:text-slate-900 disabled:no-underline"
+                        onClick={() => onOpenPatientHistory(m.patient_identifier)}
+                        disabled={!m.patient_identifier}
+                      >
+                        {m.patient_name || "Not recorded"}
+                      </button>
                       <div className="text-[11px] font-mono text-slate-400">{m.patient_identifier}</div>
                     </TableCell>
                     <TableCell>
@@ -298,12 +307,13 @@ export function NurseView({
                         size="sm"
                         variant={m.status === "DUE" ? "default" : "secondary"}
                         onClick={() => onOpenMARModal(m)}
+                        disabled={!data.mar_schedule_available}
                         className={`text-xs h-7.5 px-3 font-bold gap-1.5 shadow-2xs cursor-pointer ${
                           m.status === "DUE" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""
                         }`}
                       >
                         <QrCode className="w-3.5 h-3.5" />
-                        {m.status === "DUE" ? "Administer" : "Review"}
+                        {data.mar_schedule_available ? (m.status === "DUE" ? "Administer" : "Review") : "View record"}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -325,7 +335,7 @@ export function NurseView({
               Rapid Bedside Vitals &amp; Telemetry Ingestion
             </h2>
             <p className="text-xs text-slate-500">
-              Immediate bedside parameter ingestion with automated range classification.
+              Persist a bedside measurement to the selected patient record. Values are not automatically clinically classified.
             </p>
           </div>
         </div>
@@ -336,11 +346,9 @@ export function NurseView({
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 Inpatient
               </label>
-              <Select value={patientId} onChange={(e) => setPatientId(e.target.value)} className="text-xs">
-                <option value="CASE-001">Sarah Jenkins (CASE-001) &bull; Cardiology</option>
-                <option value="CASE-002">Robert Chen (CASE-002) &bull; Nephrology</option>
-                <option value="CASE-003">Elena Rostova (CASE-003) &bull; Internal Med</option>
-                <option value="CASE-004">Arthur Pendelton (CASE-004) &bull; Cardiology</option>
+              <Select value={patientId} onChange={(e) => setSelectedPatientId(e.target.value)} className="text-xs" required>
+                <option value="">Select a patient</option>
+                {(data.patients || []).map((patient) => <option key={patient.patient_identifier} value={patient.patient_identifier}>{patient.name} ({patient.patient_identifier})</option>)}
               </Select>
             </div>
 
@@ -389,7 +397,7 @@ export function NurseView({
           <div className="flex justify-end pt-2 border-t border-slate-100">
             <Button
               type="submit"
-              disabled={recording}
+              disabled={recording || !patientId}
               className="text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white gap-2 h-9.5 px-4 shadow-sm"
             >
               <Activity className="w-3.5 h-3.5" />

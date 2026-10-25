@@ -3,7 +3,6 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { RoleType, UserSession } from "@/lib/types";
-import { CLINICAL_PERSONAS } from "@/lib/mock-data";
 import {
   LogOut,
   RefreshCw,
@@ -58,7 +57,6 @@ export function Header({
   const router = useRouter();
   const [refreshing, setRefreshing] = React.useState(false);
   const [globalSearch, setGlobalSearch] = React.useState("");
-  const currentPersona = CLINICAL_PERSONAS[activeRole] || CLINICAL_PERSONAS["Doctor"];
 
   const handleRefresh = async () => {
     if (onRefresh) {
@@ -127,13 +125,13 @@ export function Header({
         {/* Right Section: System Status & User Actions */}
         <div className="flex items-center gap-2.5">
           {/* Real-time Status Badge */}
-          <div className="hidden sm:inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50/90 border border-emerald-200/80 text-emerald-800 text-xs font-medium shadow-3xs">
+          <div className={`hidden sm:inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-medium shadow-3xs ${isLiveApi ? "bg-emerald-50/90 border-emerald-200/80 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              {isLiveApi && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${isLiveApi ? "bg-emerald-500" : "bg-rose-500"}`}></span>
             </span>
             <span className="font-bold text-[11px] tracking-tight font-poppins">
-              {isLiveApi ? "REST API Connected" : "Local CDS Active"}
+              {isLiveApi ? "REST API Connected" : "API unavailable"}
             </span>
           </div>
 
@@ -156,11 +154,11 @@ export function Header({
                 ROLE_COLORS[activeRole].bg
               } text-white font-black text-[11px] flex items-center justify-center shadow-xs shrink-0`}
             >
-              {getInitials(currentUser?.name || currentPersona.name)}
+              {getInitials(currentUser?.name || activeRole)}
             </div>
             <div className="text-left hidden md:block">
               <div className="text-xs font-bold text-slate-900 leading-tight font-poppins">
-                {currentUser?.name || currentPersona.name}
+                {currentUser?.name || "Authenticated user"}
               </div>
             </div>
           </div>

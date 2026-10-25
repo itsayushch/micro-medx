@@ -1,39 +1,17 @@
 import {
   AdminDashboardData,
-  AuditLedgerRecord,
   AvailabilityQueueItem,
   DoctorDashboardData,
   LabReportDetail,
   NurseDashboardData,
-  NurseMARItem,
   NurseVitalLabItem,
   PatientHistoryDetail,
   PharmacistDashboardData,
+  PairSeverityAdvisoryResult,
   RoleType,
   SixAgentResult,
   UserSession,
 } from "./types";
-import {
-  CLINICAL_PERSONAS,
-  DEMO_SCENARIO_RESULTS,
-  DETERMINISTIC_PATIENT_HISTORIES,
-  generateHash,
-  generateSyntheticAuditLedger,
-  generateSyntheticPatients,
-  INITIAL_INVENTORY,
-  INITIAL_NURSE_MAR,
-  INITIAL_NURSE_VITALS,
-  INITIAL_PHARMACIST_QUEUE,
-  LAB_REPORTS,
-  PHARMACOLOGY_REFERENCE,
-} from "./mock-data";
-
-// In-memory local state fallback (persists throughout session)
-let localMARList: NurseMARItem[] = [...INITIAL_NURSE_MAR];
-let localVitalsList: NurseVitalLabItem[] = [...INITIAL_NURSE_VITALS];
-let localQueue: AvailabilityQueueItem[] = [...INITIAL_PHARMACIST_QUEUE];
-let localAuditLedger: AuditLedgerRecord[] = generateSyntheticAuditLedger();
-const localPatients = generateSyntheticPatients(265);
 
 // API Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
@@ -49,42 +27,38 @@ export function isLiveBackendAvailable(): boolean {
 }
 
 /**
- * Standard fetch helper with timeout and fallback
+ * Requests must use persisted backend state. Never substitute demo records on errors.
  */
 async function fetchWithFallback<T>(
   url: string,
-  options: RequestInit = {},
-  fallbackGenerator: () => T
+  options: RequestInit = {}
 ): Promise<{ data: T; isLive: boolean }> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  const fullUrl = url.startsWith("http") ? url : `${API_BASE_URL}${url}`;
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500);
-
-    const fullUrl = url.startsWith("http") ? url : `${API_BASE_URL}${url}`;
     const res = await fetch(fullUrl, {
       ...options,
+      credentials: "include",
+      cache: "no-store",
       headers: {
-        "Content-Type": "application/json",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...(options.headers || {}),
       },
       signal: controller.signal,
     });
-    clearTimeout(timeoutId);
-
-    if (res.ok) {
-      isBackendReachable = true;
-      const json = await res.json();
-      return { data: json as T, isLive: true };
+    const payload = await res.json().catch(() => null);
+    if (!res.ok) {
+      const detail = payload?.detail || payload?.message || `Request failed (${res.status})`;
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
     }
-    // If not OK, fallback
-    console.warn(`API returned ${res.status} for ${url}, using clinical fallback.`);
+    isBackendReachable = true;
+    return { data: payload as T, isLive: true };
+  } catch (error) {
     isBackendReachable = false;
-    return { data: fallbackGenerator(), isLive: false };
-  } catch (err) {
-    // Network / offline / timeout error -> fallback gracefully
-    console.warn(`Backend connection notice for ${url}:`, err);
-    isBackendReachable = false;
-    return { data: fallbackGenerator(), isLive: false };
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -92,12 +66,23 @@ async function fetchWithFallback<T>(
 // AUTHENTICATION APIS
 // =========================================================================
 export async function apiCheckSession(): Promise<{ user: UserSession | null; isLive: boolean }> {
-  const res = await fetchWithFallback<UserSession | null>(
+  const res = await fetchWithFallback<{ authenticated: boolean; user: Record<string, unknown> | null }>(
     "/auth/session",
-    { method: "GET" },
-    () => null
+    { method: "GET" }
   );
-  return { user: res.data, isLive: res.isLive };
+  const user = res.data.authenticated && res.data.user ? mapUser(res.data.user) : null;
+  return { user, isLive: res.isLive };
+}
+
+function mapUser(user: Record<string, unknown>): UserSession {
+  return {
+    user_id: Number(user.id),
+    phone: String(user.phone_number || ""),
+    name: String(user.full_name || ""),
+    role: String(user.role) as RoleType,
+    department: String(user.department || ""),
+    is_authenticated: true,
+  };
 }
 
 export async function apiLogin(
@@ -105,172 +90,99 @@ export async function apiLogin(
   role: RoleType,
   password?: string
 ): Promise<{ user: UserSession; isLive: boolean }> {
-  const fallbackUser: UserSession = {
-    user_id: 1,
-    phone: phone || CLINICAL_PERSONAS[role]?.phone || "+1 (555) 019-2831",
-    name: CLINICAL_PERSONAS[role]?.name || "Authorized Clinician",
-    role,
-    department: CLINICAL_PERSONAS[role]?.dept || "Clinical Services",
-    session_token: "mock-session-token-aegis-" + Date.now(),
-    is_authenticated: true,
-  };
-
-  const res = await fetchWithFallback<UserSession>(
+  const res = await fetchWithFallback<{ user: Record<string, unknown> }>(
     "/auth/login",
     {
       method: "POST",
-      body: JSON.stringify({ phone, password: password || "demo123", role }),
-    },
-    () => fallbackUser
+      body: JSON.stringify({ phone_number: phone, password, role }),
+    }
   );
-  return { user: res.data, isLive: res.isLive };
+  return { user: mapUser(res.data.user), isLive: res.isLive };
 }
 
 export async function apiLogout(): Promise<boolean> {
   try {
-    await fetch(`${API_BASE_URL}/auth/logout`, { method: "POST" });
+    const response = await fetch(`${API_BASE_URL}/auth/logout`, { method: "POST", credentials: "include" });
+    if (!response.ok) throw new Error("Sign out failed");
   } catch {
     // Ignore
   }
   return true;
 }
 
+export async function apiSwitchRole(role: RoleType): Promise<UserSession> {
+  const res = await fetchWithFallback<{ user: Record<string, unknown> }>("/auth/switch-role", {
+    method: "POST",
+    body: JSON.stringify({ new_role: role }),
+  });
+  return mapUser(res.data.user);
+}
+
 // =========================================================================
 // DOCTOR APIS
 // =========================================================================
 export async function apiGetDoctorDashboard(): Promise<{ data: DoctorDashboardData; isLive: boolean }> {
-  const fallback: DoctorDashboardData = {
-    role: "Doctor",
-    stats: {
-      total_patients: localPatients.length,
-      pending_cosigns_count: 1,
-      active_findings_count: 2,
-      substitution_requests_count: localQueue.filter((q) => q.substitution_status.includes("Pending") || q.substitution_status.includes("Required")).length,
-    },
-    substitution_requests: [
-      {
-        case_id: "CASE-002",
-        patient_name: "Robert Chen",
-        patient_identifier: "DEMO-PT-002",
-        original_prescription: "Enoxaparin Sodium (Lovenox) 80 mg / 0.8 mL Pre-filled Syringe",
-        suggested_alternative: "Clexane (Enoxaparin Sodium) 80 mg / 0.8 mL Pre-filled Syringe",
-        stock_detail: "60 Syringes available in Bin D-12 (Batch #CX-88102)",
-        pharmacist_name: "Marcus Vance, PharmD",
-        request_time: "Today, 11:20 UTC",
-        clinical_reason: "Prescribed brand Lovenox 80mg is completely out of stock. Clexane has identical bioequivalence, strength, and route.",
-        status: "PENDING_DOCTOR_APPROVAL",
-      },
-    ],
-    pending_cosigns: [
-      {
-        simulation_id: "SIM-ORD-001",
-        case_id: "CASE-001",
-        patient_identifier: "DEMO-PT-001",
-        patient_name: "Sarah Jenkins",
-        proposed_action: "Reduce Warfarin maintenance dose by 50% (2.5 mg PO Daily)",
-        rationale: "CYP2C9 competitive clearance inhibition triggered with severe bleeding risk (INR 3.4).",
-        status: "PENDING_DOCTOR_COSIGN",
-        urgency: "CRITICAL",
-      },
-    ],
-    inpatients: localPatients.slice(0, 10),
-    active_findings: [
-      {
-        id: "FIND-001",
-        patient_id: "CASE-001",
-        patient_name: "Sarah Jenkins",
-        title: "Severe CYP2C9 Inhibition: Warfarin + Fluconazole",
-        severity: "CRITICAL",
-        description: "Active high bleeding hazard. Morning INR 3.4 is significantly prolonged.",
-        rule_id: "RULE-DDI-CYP2C9-001",
-        created_at: "Today, 09:15 UTC",
-      },
-      {
-        id: "FIND-002",
-        patient_id: "CASE-002",
-        patient_name: "Robert Chen",
-        title: "LMWH Accumulation Risk in Declining Renal Function",
-        severity: "HIGH",
-        description: "Enoxaparin standard dosing with eGFR 28 mL/min.",
-        rule_id: "RULE-RENAL-LMWH-002",
-        created_at: "Today, 08:20 UTC",
-      },
-    ],
-  };
-
-  return fetchWithFallback<DoctorDashboardData>(
+  const result = await fetchWithFallback<Record<string, any>>(
     "/api/dashboard/doctor",
-    { method: "GET" },
-    () => fallback
+    { method: "GET" }
   );
+  const response = result.data;
+  const data: DoctorDashboardData = {
+    role: "Doctor",
+    stats: response.stats,
+    substitution_requests: (response.substitution_requests || []).map((request: any) => ({
+      ...request,
+      case_id: String(request.patient_identifier || request.patient_id || ""),
+      request_id: Number(request.request_id),
+      original_prescription: request.original_prescription || request.prescribed_medicine || "Not recorded",
+      suggested_alternative: request.suggested_brand || "Not recorded",
+      stock_detail: "Inventory is not recorded",
+      request_time: request.request_date || "Not recorded",
+      clinical_reason: request.reason || "",
+      status: String(request.status || "pending").toUpperCase(),
+    })),
+    pending_cosigns: response.pending_cosigns || [],
+    inpatients: (response.patients || []).map((patient: any) => ({
+      id: String(patient.patient_identifier || ""),
+      name: patient.name,
+      age: null,
+      sex: patient.sex || "Not recorded",
+      dept: patient.department || "Not recorded",
+      condition: patient.latest_finding || "Not recorded",
+      regimen: (patient.active_medications || []).map((medication: any) => medication.name).join(", "),
+      risk: "Not recorded",
+      clinician: response.clinician || "Not recorded",
+    })),
+    active_findings: (response.findings || []).map((finding: any) => ({
+      ...finding,
+      id: String(finding.id),
+      patient_id: String(finding.patient_id),
+      patient_name: (response.patients || []).find((row: any) => row.id === finding.patient_id)?.name || "Not recorded",
+      severity: String(finding.severity || "LOW").toUpperCase(),
+    })),
+  };
+  return { data, isLive: result.isLive };
 }
 
 export async function apiSubmitDoctorSubstitutionDecision(
-  caseId: string,
+  requestId: string,
   decision: "APPROVED" | "REJECTED",
-  notes: string,
-  doctorName = "Dr. Sarah Lin, MD"
+  notes: string
 ): Promise<{ success: boolean; isLive: boolean; message: string }> {
-  // Update local queue state for UI continuity
-  const found = localQueue.find((q) => q.case_id === caseId);
-  if (found) {
-    if (decision === "APPROVED") {
-      found.status = "Substitution Approved by Doctor";
-      found.substitution_status = "Substitution Approved (Ready to Dispense)";
-      found.is_ready_for_dispensing = true;
-      found.action = "SUBSTITUTION_APPROVED";
-    } else {
-      found.status = "Substitution Rejected by Doctor";
-      found.substitution_status = "Substitution Rejected";
-      found.is_ready_for_dispensing = false;
-    }
-  }
-
-  // Add audit record
-  const prevHash = localAuditLedger[localAuditLedger.length - 1]?.current_hash || "GENESIS";
-  const newHash = generateHash(`AUDIT_${Date.now()}_${decision}`);
-  localAuditLedger.unshift({
-    id: localAuditLedger.length + 1,
-    timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
-    actor: doctorName,
-    role: "Doctor",
-    category: "SUBSTITUTION",
-    entity: `${found?.patient_name || "Patient"} (${caseId})`,
-    action: `Doctor ${decision === "APPROVED" ? "Approved" : "Rejected"} Substitution: ${notes || "Verified by clinician"}`,
-    result: decision === "APPROVED" ? "SUBSTITUTION APPROVED ✓" : "SUBSTITUTION REJECTED ✗",
-    prev_hash: prevHash,
-    current_hash: newHash,
-    payload: {
-      block_id: localAuditLedger.length + 1,
-      timestamp: new Date().toISOString(),
-      actor: doctorName,
-      role: "Doctor",
-      action: `DOCTOR_SUBSTITUTION_${decision}`,
-      entity: caseId,
-      notes,
-      cryptographic_verification: "SHA256_HASH_VALID_INTACT",
-    },
-  });
-
-  const res = await fetchWithFallback<{ success: boolean; message: string }>(
+  const res = await fetchWithFallback<{ status: string; message: string }>(
     "/api/dashboard/doctor/substitution-decision",
     {
       method: "POST",
       body: JSON.stringify({
-        case_id: caseId,
+        request_id: Number(requestId),
         decision,
-        notes,
-        doctor_name: doctorName,
+        doctor_notes: notes,
       }),
-    },
-    () => ({
-      success: true,
-      message: `Doctor substitution decision (${decision}) recorded successfully.`,
-    })
+    }
   );
 
   return {
-    success: res.data.success,
+    success: res.data.status === decision.toLowerCase(),
     message: res.data.message,
     isLive: res.isLive,
   };
@@ -279,53 +191,23 @@ export async function apiSubmitDoctorSubstitutionDecision(
 export async function apiCosignOrder(
   simulationId: string,
   action: "approved" | "rejected",
-  doctorName = "Dr. Sarah Lin, MD",
-  reason = "Clinical safety threshold verified"
+  doctorName: string,
+  reason: string
 ): Promise<{ success: boolean; isLive: boolean; message: string }> {
-  // Add audit record
-  const prevHash = localAuditLedger[localAuditLedger.length - 1]?.current_hash || "GENESIS";
-  const newHash = generateHash(`COSIGN_${Date.now()}_${simulationId}`);
-  localAuditLedger.unshift({
-    id: localAuditLedger.length + 1,
-    timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
-    actor: doctorName,
-    role: "Doctor",
-    category: "CLINICAL",
-    entity: `Simulation Order (${simulationId})`,
-    action: `Doctor Authorized & Co-signed Order: ${reason}`,
-    result: "CO-SIGNED & APPROVED ✓",
-    prev_hash: prevHash,
-    current_hash: newHash,
-    payload: {
-      block_id: localAuditLedger.length + 1,
-      timestamp: new Date().toISOString(),
-      actor: doctorName,
-      role: "Doctor",
-      action: "DOCTOR_ORDER_COSIGNED",
-      entity: simulationId,
-      cryptographic_verification: "SHA256_HASH_VALID_INTACT",
-    },
-  });
-
-  const res = await fetchWithFallback<{ success: boolean; message: string }>(
+  const res = await fetchWithFallback<{ status: string; message: string }>(
     `/simulated-orders/${encodeURIComponent(simulationId)}/cosign`,
     {
       method: "POST",
       body: JSON.stringify({
-        simulation_id: simulationId,
-        cosigned: action === "approved",
-        doctor_name: doctorName,
-        reason,
+        cosigned_by: doctorName,
+        decision: action,
+        clinical_notes: reason,
       }),
-    },
-    () => ({
-      success: true,
-      message: "Physician co-signature recorded and verified on the cryptographic audit ledger.",
-    })
+    }
   );
 
   return {
-    success: res.data.success,
+    success: res.data.status === `cosigned_${action}`,
     message: res.data.message,
     isLive: res.isLive,
   };
@@ -335,85 +217,39 @@ export async function apiCosignOrder(
 // NURSE APIS
 // =========================================================================
 export async function apiGetNurseDashboard(): Promise<{ data: NurseDashboardData; isLive: boolean }> {
-  const dueCount = localMARList.filter((m) => m.status === "DUE").length;
-  const adminCount = localMARList.filter((m) => m.status === "ADMINISTERED").length;
-  const heldCount = localMARList.filter((m) => m.status === "HELD").length;
-  const vitalsCount = localVitalsList.length;
-  const attentionCount =
-    localMARList.filter((m) => m.requires_escalation).length +
-    localVitalsList.filter((v) => v.status === "High" || v.status === "Critical").length;
-
-  const fallback: NurseDashboardData = {
+  const res = await fetchWithFallback<Record<string, any>>(
+    "/api/dashboard/nurse",
+    { method: "GET" }
+  );
+  const raw = res.data;
+  const data: NurseDashboardData = {
     role: "Nurse",
     stats: {
-      medications_due: dueCount,
-      medications_administered: adminCount,
-      medications_held: heldCount,
-      vitals_recorded: vitalsCount,
-      attention_required: attentionCount,
+      ...raw.stats,
+      medications_due: raw.mar_schedule_available ? raw.stats.medications_due ?? null : null,
     },
-    mar_schedule: [...localMARList],
-    vitals_labs: [...localVitalsList],
+    mar_schedule: (raw.mar_schedule || []).map((row: any) => ({
+      ...row,
+      status: String(row.status || "NOT_RECORDED").toUpperCase(),
+      scheduled_time: row.scheduled_time || "Not scheduled",
+    })),
+    vitals_labs: (raw.vitals_labs || []).map((lab: any) => ({
+      ...lab, id: String(lab.id), case_id: lab.patient_identifier || "", recorded_by: lab.recorded_by || "Not recorded",
+      status: "RECORDED",
+    })),
+    patients: raw.patients || [],
+    mar_schedule_available: Boolean(raw.mar_schedule_available),
+    mar_schedule_note: raw.mar_schedule_note || "",
   };
-
-  return fetchWithFallback<NurseDashboardData>(
-    "/api/dashboard/nurse",
-    { method: "GET" },
-    () => fallback
-  );
+  return { data, isLive: res.isLive };
 }
 
 export async function apiSubmitMARAction(
   orderId: string,
-  action: "ADMINISTER" | "HOLD" | "REJECT",
-  notes: string,
-  nurseName = "Elena Rostova, RN",
-  vitalsChecked = true
+  action: "ADMINISTER" | "HOLD",
+  notes: string
 ): Promise<{ success: boolean; isLive: boolean; message: string }> {
-  const item = localMARList.find((m) => m.mar_id === orderId);
-  if (item) {
-    if (action === "ADMINISTER") {
-      item.status = "ADMINISTERED";
-      item.recorded_by = nurseName;
-      item.recorded_at = new Date().toISOString().replace("T", " ").substring(0, 16) + " UTC";
-      item.nursing_note = notes || "Medication administered following barcode verification.";
-      item.requires_escalation = false;
-    } else if (action === "HOLD") {
-      item.status = "HELD";
-      item.recorded_by = nurseName;
-      item.recorded_at = new Date().toISOString().replace("T", " ").substring(0, 16) + " UTC";
-      item.hold_reason = notes || "Held by nurse pending physician review.";
-      item.requires_escalation = true;
-    }
-  }
-
-  // Add audit record
-  const prevHash = localAuditLedger[localAuditLedger.length - 1]?.current_hash || "GENESIS";
-  const newHash = generateHash(`MAR_${Date.now()}_${orderId}`);
-  localAuditLedger.unshift({
-    id: localAuditLedger.length + 1,
-    timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
-    actor: nurseName,
-    role: "Nurse",
-    category: "CLINICAL",
-    entity: `${item?.patient_name || "Patient"} - ${item?.medication || "Medication"}`,
-    action: `MAR ${action}: ${item?.medication} ${item?.dose} (${notes || "Standard bedside protocol"})`,
-    result: action === "ADMINISTER" ? "ADMINISTERED ✓" : "HELD ON SAFETY ALERT ⚠️",
-    prev_hash: prevHash,
-    current_hash: newHash,
-    payload: {
-      block_id: localAuditLedger.length + 1,
-      timestamp: new Date().toISOString(),
-      actor: nurseName,
-      role: "Nurse",
-      action: `MAR_MEDICATION_${action}`,
-      entity: orderId,
-      vitals_checked: vitalsChecked,
-      cryptographic_verification: "SHA256_HASH_VALID_INTACT",
-    },
-  });
-
-  const res = await fetchWithFallback<{ success: boolean; message: string }>(
+  const res = await fetchWithFallback<{ status: string; message: string }>(
     "/api/dashboard/nurse/mar-action",
     {
       method: "POST",
@@ -421,18 +257,13 @@ export async function apiSubmitMARAction(
         mar_id: orderId,
         action,
         notes,
-        nurse_name: nurseName,
-        vitals_checked: vitalsChecked,
+        hold_reason: action === "HOLD" ? notes : undefined,
       }),
-    },
-    () => ({
-      success: true,
-      message: `Medication Administration Record (${action}) successfully recorded.`,
-    })
+    }
   );
 
   return {
-    success: res.data.success,
+    success: res.data.status === "ADMINISTERED" || res.data.status === "HELD",
     message: res.data.message,
     isLive: res.isLive,
   };
@@ -442,94 +273,24 @@ export async function apiRecordNurseVital(
   patientId: string,
   param: string,
   value: string,
-  unit: string,
-  nurseName = "Elena Rostova, RN"
+  unit: string
 ): Promise<{ success: boolean; isLive: boolean; message: string; record: NurseVitalLabItem }> {
-  const patient = localPatients.find((p) => p.id === patientId) || { name: "Sarah Jenkins", id: patientId };
-
-  let status: "Normal" | "High" | "Critical" | "Low" = "Normal";
-  const numVal = parseFloat(value);
-  if (param.includes("INR")) {
-    if (numVal > 3.0) status = "Critical";
-    else if (numVal > 1.5) status = "High";
-  } else if (param.includes("Creatinine")) {
-    if (numVal > 2.0) status = "Critical";
-    else if (numVal > 1.3) status = "High";
-  } else if (param.includes("Blood Pressure")) {
-    if (value.startsWith("15") || value.startsWith("16") || value.startsWith("17")) status = "Critical";
-    else if (value.startsWith("14") || value.startsWith("13")) status = "High";
-  } else if (param.includes("Heart Rate")) {
-    if (numVal < 50 || numVal > 120) status = "Critical";
-    else if (numVal < 60 || numVal > 100) status = "High";
-  }
-
-  const newRecord: NurseVitalLabItem = {
-    id: `VIT-${String(localVitalsList.length + 1).padStart(3, "0")}`,
-    case_id: patientId,
-    patient_identifier: patientId,
-    patient_name: patient.name,
-    parameter: param,
-    value,
-    unit,
-    recorded_time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
-    status,
-    source_type: "Nurse Bedside Ingestion",
-    recorded_by: nurseName,
-  };
-
-  localVitalsList.unshift(newRecord);
-
-  // Add audit record
-  const prevHash = localAuditLedger[localAuditLedger.length - 1]?.current_hash || "GENESIS";
-  const newHash = generateHash(`VITAL_${Date.now()}_${newRecord.id}`);
-  localAuditLedger.unshift({
-    id: localAuditLedger.length + 1,
-    timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
-    actor: nurseName,
-    role: "Nurse",
-    category: "CLINICAL",
-    entity: `${patient.name} (${patientId})`,
-    action: `Bedside Vital Recorded: ${param} = ${value} ${unit} [${status}]`,
-    result: status === "Normal" ? "RECORDED ✓" : "FLAGGED ALERT ⚠️",
-    prev_hash: prevHash,
-    current_hash: newHash,
-    payload: {
-      block_id: localAuditLedger.length + 1,
-      timestamp: new Date().toISOString(),
-      actor: nurseName,
-      role: "Nurse",
-      action: "BEDSIDE_VITAL_RECORDED",
-      entity: patientId,
-      param,
-      value,
-      unit,
-      status,
-      cryptographic_verification: "SHA256_HASH_VALID_INTACT",
-    },
-  });
-
-  const res = await fetchWithFallback<{ success: boolean; message: string; record: NurseVitalLabItem }>(
+  const res = await fetchWithFallback<{ status: string; record: NurseVitalLabItem; message?: string }>(
     "/api/dashboard/nurse/record-vital",
     {
       method: "POST",
       body: JSON.stringify({
-        patient_id: patientId,
-        param,
+        case_id: patientId,
+        parameter: param,
         value,
         unit,
-        nurse_name: nurseName,
       }),
-    },
-    () => ({
-      success: true,
-      message: `Vital parameter (${param}: ${value} ${unit}) recorded successfully.`,
-      record: newRecord,
-    })
+    }
   );
 
   return {
-    success: res.data.success,
-    message: res.data.message,
+    success: res.data.status === "RECORDED",
+    message: res.data.message || "Measurement saved to the patient record.",
     record: res.data.record,
     isLive: res.isLive,
   };
@@ -539,152 +300,109 @@ export async function apiRecordNurseVital(
 // PHARMACIST APIS
 // =========================================================================
 export async function apiGetPharmacistDashboard(): Promise<{ data: PharmacistDashboardData; isLive: boolean }> {
-  const totalReceived = localQueue.length;
-  const availableCount = localQueue.filter((q) => q.availability === "AVAILABLE").length;
-  const subRequiredCount = localQueue.filter((q) => q.availability === "UNAVAILABLE").length;
-  const dispensedCount = localQueue.filter((q) => q.status === "Ready for Dispensing" || q.status.includes("Approved")).length;
-
-  const fallback: PharmacistDashboardData = {
+  const res = await fetchWithFallback<Record<string, any>>(
+    "/api/dashboard/pharmacist",
+    { method: "GET" }
+  );
+  const raw = res.data;
+  const data: PharmacistDashboardData = {
     role: "Clinical Pharmacist",
     stats: {
-      prescriptions_received: totalReceived,
-      available: availableCount,
-      substitution_required: subRequiredCount,
-      dispensed_today: dispensedCount,
-      high_risk_flagged: 2,
-      inventory_value: "$48,920.00",
+      prescriptions_received: raw.stats.prescriptions_received,
+      available: raw.stats.inventory_tracked ? raw.stats.available : "Not tracked",
+      substitution_required: raw.stats.doctor_approval_pending || 0,
+      dispensed_today: raw.stats.inventory_tracked ? raw.stats.ready_for_dispensing : "Not tracked",
+      high_risk_flagged: (raw.pharmacology_insights || []).filter((item: any) => ["high", "critical", "major"].includes(String(item.severity).toLowerCase())).length,
+      inventory_value: "Not tracked",
     },
-    availability_queue: [...localQueue],
-    local_inventory: [...INITIAL_INVENTORY],
-    pharmacology_insights: [...PHARMACOLOGY_REFERENCE],
+    availability_queue: (raw.availability_queue || []).map((item: any) => ({
+      ...item,
+      case_id: String(item.case_id || ""),
+      patient_id: Number(item.patient_id),
+      order_id: Number(item.order_id),
+      medication_id: Number(item.medication_id),
+      prescribed_brand: item.prescribed_brand || "Not recorded",
+      mrn: item.mrn || "Not recorded",
+      age: item.age ?? null,
+      sex: item.sex || "Not recorded",
+      strength: item.strength || "Not recorded",
+      formulation: item.formulation || "Not recorded",
+      availability: item.availability === "AVAILABLE" || item.availability === "UNAVAILABLE" ? item.availability : "UNTRACKED",
+      available_quantity: item.available_quantity ?? null,
+      substitution_status: item.substitution_status || item.status || "Not recorded",
+      available_alternatives: [],
+      action: "",
+    })),
+    local_inventory: [],
+    pharmacology_insights: (raw.pharmacology_insights || []).map((item: any) => ({
+      pair: item.pair || item.title || "Persisted finding",
+      mechanism: item.mechanism || item.description || "",
+      clinical_impact: item.clinical_impact || item.severity || "Not assessed",
+      recommended_action: item.recommended_action || item.action || "Not recorded",
+      evidence_source: item.evidence_source || "Not recorded",
+      evidence_id: item.evidence_id || "",
+      provenance: item.provenance || "",
+    })),
   };
-
-  return fetchWithFallback<PharmacistDashboardData>(
-    "/api/dashboard/pharmacist",
-    { method: "GET" },
-    () => fallback
-  );
+  return { data, isLive: res.isLive };
 }
 
 export async function apiSubmitSubstitutionRequest(
-  caseId: string,
+  item: AvailabilityQueueItem,
   suggestedBrand: string,
   reason: string,
   notes: string,
-  pharmacistName = "Marcus Vance, PharmD"
+  idempotencyKey: string
 ): Promise<{ success: boolean; isLive: boolean; message: string }> {
-  const found = localQueue.find((q) => q.case_id === caseId);
-  if (found) {
-    found.status = "Pending Doctor Verification";
-    found.substitution_status = "Doctor Approval Pending";
-    found.doctor_suggested_alt = suggestedBrand;
+  if (!Number.isInteger(item.patient_id) || !Number.isInteger(item.order_id) || !Number.isInteger(item.medication_id)) {
+    throw new Error("This order is missing persisted backend references and cannot be submitted.");
   }
-
-  // Add audit record
-  const prevHash = localAuditLedger[localAuditLedger.length - 1]?.current_hash || "GENESIS";
-  const newHash = generateHash(`SUB_REQ_${Date.now()}_${caseId}`);
-  localAuditLedger.unshift({
-    id: localAuditLedger.length + 1,
-    timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
-    actor: pharmacistName,
-    role: "Pharmacist",
-    category: "SUBSTITUTION",
-    entity: `${found?.patient_name || "Patient"} (${caseId})`,
-    action: `Pharmacy Substitution Requested: ${suggestedBrand} (${found?.prescribed_brand} Unavailable)`,
-    result: "DOCTOR APPROVAL PENDING ⏳",
-    prev_hash: prevHash,
-    current_hash: newHash,
-    payload: {
-      block_id: localAuditLedger.length + 1,
-      timestamp: new Date().toISOString(),
-      actor: pharmacistName,
-      role: "Pharmacist",
-      action: "PHARMACY_SUBSTITUTION_REQUESTED",
-      entity: caseId,
-      suggested_brand: suggestedBrand,
-      reason,
-      notes,
-      cryptographic_verification: "SHA256_HASH_VALID_INTACT",
-    },
-  });
-
-  const res = await fetchWithFallback<{ success: boolean; message: string }>(
+  const res = await fetchWithFallback<{ status: string; message: string }>(
     "/api/dashboard/pharmacist/substitution-request",
     {
       method: "POST",
       body: JSON.stringify({
-        case_id: caseId,
-        suggested_alternative: suggestedBrand,
-        clinical_reason: reason,
-        notes,
-        pharmacist_name: pharmacistName,
+        patient_id: item.patient_id,
+        order_id: item.order_id,
+        medication_id: item.medication_id,
+        idempotency_key: idempotencyKey,
+        suggested_brand: suggestedBrand,
+        reason,
+        pharmacist_notes: notes,
       }),
-    },
-    () => ({
-      success: true,
-      message: "Substitution request successfully submitted to prescribing physician.",
-    })
+    }
   );
 
   return {
-    success: res.data.success,
+    success: res.data.status === "pending",
     message: res.data.message,
     isLive: res.isLive,
   };
 }
 
 export async function apiDispenseMedication(
-  caseId: string,
-  pharmacistName = "Marcus Vance, PharmD",
-  notes = "Prescription verified and marked ready for dispensing"
+  item: AvailabilityQueueItem,
+  pharmacistName: string,
+  notes: string
 ): Promise<{ success: boolean; isLive: boolean; message: string }> {
-  const found = localQueue.find((q) => q.case_id === caseId);
-  if (found) {
-    found.status = "Ready for Dispensing";
-    found.substitution_status = "Dispensing Authorized ✓";
-    found.is_ready_for_dispensing = true;
-  }
-
-  // Add audit record
-  const prevHash = localAuditLedger[localAuditLedger.length - 1]?.current_hash || "GENESIS";
-  const newHash = generateHash(`DISPENSE_${Date.now()}_${caseId}`);
-  localAuditLedger.unshift({
-    id: localAuditLedger.length + 1,
-    timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
-    actor: pharmacistName,
-    role: "Pharmacist",
-    category: "VERIFICATION",
-    entity: `${found?.patient_name || "Patient"} (${caseId})`,
-    action: `Prescription Verified & Marked Ready for Dispensing: ${found?.prescribed_medicine || "Medication"}`,
-    result: "READY TO DISPENSE ✓",
-    prev_hash: prevHash,
-    current_hash: newHash,
-    payload: {
-      block_id: localAuditLedger.length + 1,
-      timestamp: new Date().toISOString(),
-      actor: pharmacistName,
-      role: "Pharmacist",
-      action: "PHARMACIST_PRESCRIPTION_VERIFIED",
-      entity: caseId,
-      notes,
-      cryptographic_verification: "SHA256_HASH_VALID_INTACT",
-    },
-  });
-
   const res = await fetchWithFallback<{ success: boolean; message: string }>(
     "/api/dashboard/pharmacist/dispense",
     {
       method: "POST",
       body: JSON.stringify({
-        case_id: caseId,
+        case_id: item.case_id,
+        patient_id: item.patient_id,
+        patient_identifier: item.patient_identifier,
+        patient_name: item.patient_name,
+        medication: item.prescribed_medicine,
+        strength: item.strength,
+        route: item.route,
+        formulation: item.formulation,
+        frequency: item.frequency,
         pharmacist_name: pharmacistName,
         notes,
       }),
-    },
-    () => ({
-      success: true,
-      message: "Medication successfully verified and marked ready for dispensing.",
-    })
+    }
   );
 
   return {
@@ -700,14 +418,9 @@ export async function apiDispenseMedication(
 export async function apiGetPatientHistory(
   identifier: string
 ): Promise<{ data: PatientHistoryDetail; isLive: boolean }> {
-  const fallback =
-    DETERMINISTIC_PATIENT_HISTORIES[identifier] ||
-    DETERMINISTIC_PATIENT_HISTORIES["CASE-001"];
-
   return fetchWithFallback<PatientHistoryDetail>(
     `/api/dashboard/patient-history/${encodeURIComponent(identifier)}`,
-    { method: "GET" },
-    () => fallback
+    { method: "GET" }
   );
 }
 
@@ -715,24 +428,53 @@ export async function apiGetPatientHistory(
 // ADMIN & AUDIT CHAIN APIS
 // =========================================================================
 export async function apiGetAdminDashboard(): Promise<{ data: AdminDashboardData; isLive: boolean }> {
-  const fallback: AdminDashboardData = {
-    stats: {
-      total_patients: localPatients.length,
-      total_audit_events: localAuditLedger.length,
-      tamper_checks_passed: true,
-      chain_length: localAuditLedger.length,
-      active_inpatients: 48,
-      critical_interventions: 12,
-    },
-    audit_records: [...localAuditLedger],
-    patients: [...localPatients],
-  };
-
-  return fetchWithFallback<AdminDashboardData>(
+  const res = await fetchWithFallback<Record<string, any>>(
     "/api/dashboard/admin",
-    { method: "GET" },
-    () => fallback
+    { method: "GET" }
   );
+  const raw = res.data;
+  const chain = raw.audit_chain || {};
+  const data: AdminDashboardData = {
+    stats: {
+      total_patients: (raw.patients || []).length,
+      total_audit_events: chain.total_records ?? 0,
+      tamper_checks_passed: chain.is_valid === true,
+      chain_length: chain.total_records ?? 0,
+      active_inpatients: (raw.patients || []).length,
+      critical_interventions: (raw.patients || []).filter((patient: any) =>
+        ["CRITICAL", "MAJOR", "HIGH"].includes(String(patient.risk || "").toUpperCase())
+      ).length,
+    },
+    audit_records: (chain.recent_records || []).map((record: any) => ({
+      id: record.id, timestamp: record.timestamp, actor: record.actor || "Not recorded",
+      role: "", category: String(record.category || "AUDIT").toUpperCase(), entity: record.entity || "",
+      action: record.action || record.event_type || "", result: record.result || "",
+      prev_hash: record.prev_hash || "", current_hash: record.hash || "",
+      payload: record.payload || {},
+    })),
+    patients: (raw.patients || []).map((patient: any) => ({
+      id: patient.patient_identifier, name: patient.name,
+      age: patient.date_of_birth ? calculateAge(patient.date_of_birth) : null,
+      sex: patient.sex || "Not recorded",
+      dept: patient.department || "Not recorded", condition: patient.latest_finding || "Not recorded",
+      regimen: (patient.active_medications || []).join(", "),
+      risk: ["CRITICAL", "MAJOR", "HIGH"].includes(String(patient.risk).toUpperCase()) ? "High" :
+        String(patient.risk).toUpperCase() === "MODERATE" ? "Moderate" :
+        String(patient.risk).toUpperCase() === "MINOR" ? "Low" : "Not recorded",
+      clinician: "Not recorded",
+    })),
+  };
+  return { data, isLive: res.isLive };
+}
+
+function calculateAge(dateOfBirth: string): number | null {
+  const birth = new Date(dateOfBirth);
+  if (Number.isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  if (today.getMonth() < birth.getMonth() ||
+      (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())) age -= 1;
+  return age >= 0 ? age : null;
 }
 
 export async function apiVerifyAuditChain(): Promise<{
@@ -742,22 +484,14 @@ export async function apiVerifyAuditChain(): Promise<{
   isLive: boolean;
 }> {
   const res = await fetchWithFallback<{
-    verified: boolean;
-    total_blocks: number;
+    is_valid: boolean;
+    total_records: number;
     message: string;
-  }>(
-    "/audit/verify",
-    { method: "GET" },
-    () => ({
-      verified: true,
-      total_blocks: localAuditLedger.length,
-      message: `All ${localAuditLedger.length} cryptographic hash blocks successfully verified. Chain is intact and immutable.`,
-    })
-  );
+  }>("/audit/verify-chain", { method: "GET" });
 
   return {
-    verified: res.data.verified,
-    total_blocks: res.data.total_blocks,
+    verified: res.data.is_valid,
+    total_blocks: res.data.total_records,
     message: res.data.message,
     isLive: res.isLive,
   };
@@ -769,12 +503,9 @@ export async function apiVerifyAuditChain(): Promise<{
 export async function apiRunScenario(
   scenarioId: number
 ): Promise<{ data: SixAgentResult; isLive: boolean }> {
-  const fallback = DEMO_SCENARIO_RESULTS[scenarioId] || DEMO_SCENARIO_RESULTS[1];
-
   return fetchWithFallback<SixAgentResult>(
     `/demo/run/${scenarioId}`,
-    { method: "POST" },
-    () => fallback
+    { method: "POST" }
   );
 }
 
@@ -785,12 +516,10 @@ export async function apiGetLabReport(
   reportId: string
 ): Promise<{ data: LabReportDetail; isLive: boolean }> {
   const cleanId = reportId.replace(".json", "");
-  const fallback = LAB_REPORTS[cleanId] || LAB_REPORTS["LAB-2026-0001"];
 
   return fetchWithFallback<LabReportDetail>(
     `/api/lab-reports/${encodeURIComponent(cleanId)}/view`,
-    { method: "POST" },
-    () => fallback
+    { method: "POST" }
   );
 }
 
@@ -801,90 +530,20 @@ export async function apiEvaluatePrescription(
   patientId: string,
   drugName: string,
   dose: string
-): Promise<{ data: SixAgentResult; isLive: boolean }> {
-  const lower = drugName.toLowerCase();
-  let matchedScenario = 1;
-  let severity: "CRITICAL" | "HIGH" | "MODERATE" | "LOW" = "HIGH";
-  let ruleId = "RULE-SANDBOX-MULTI";
-  let customTitle = `Multi-Drug Regimen Safety Analysis: ${drugName}`;
-  let customDesc = `Evaluation of prescribed regimen (${drugName}) against inpatient lab telemetry, renal clearance, and active medications.`;
-
-  if (
-    (lower.includes("warfarin") && (lower.includes("flucon") || lower.includes("diflucan"))) ||
-    (lower.includes("warfarin") && lower.includes("aspirin"))
-  ) {
-    matchedScenario = 1;
-    severity = "CRITICAL";
-    ruleId = "RULE-DDI-CYP2C9-001";
-    customTitle = `CRITICAL DDI: Warfarin + Fluconazole CYP2C9 Inhibition`;
-    customDesc = `Severe Pharmacokinetic Interaction: Fluconazole is a potent inhibitor of cytochrome P450 2C9 (CYP2C9), the primary clearance pathway for biologically active S-warfarin. Concomitant administration inhibits Warfarin metabolism, causing rapid toxic accumulation, profound INR elevation, and life-threatening internal hemorrhage.`;
-  } else if (
-    (lower.includes("enox") || lower.includes("lovenox") || lower.includes("clexane") || lower.includes("heparin")) &&
-    (patientId === "CASE-002" || lower.includes("renal") || lower.includes("ckd"))
-  ) {
-    matchedScenario = 2;
-    severity = "CRITICAL";
-    ruleId = "RULE-RENAL-LMWH-002";
-    customTitle = `Contraindicated in Renal Impairment: Enoxaparin (LMWH)`;
-    customDesc = `Enoxaparin undergoes renal elimination. Patient lab telemetry shows CrCl 28 mL/min (CKD Stage 3B), creating severe risk of unmonitored LMWH bioaccumulation and hemorrhagic shock unless substituted with Unfractionated Heparin (UFH).`;
-  } else if (
-    (lower.includes("lisinopril") && lower.includes("enalapril")) ||
-    (lower.includes("ramipril") && lower.includes("lisinopril")) ||
-    lower.includes("duplication") ||
-    lower.includes("ace")
-  ) {
-    matchedScenario = 3;
-    severity = "HIGH";
-    ruleId = "RULE-DUP-ACEI-003";
-    customTitle = `Therapeutic Class Duplication: Dual ACE Inhibitors`;
-    customDesc = `Redundant ACE-inhibitor duplication (Lisinopril + Enalapril). Prescribing multiple agents within the same renin-angiotensin class offers zero therapeutic benefit while significantly amplifying risks of hyperkalemia, acute kidney injury, and profound hypotension.`;
-  } else if (lower.includes("digoxin") && lower.includes("amiodarone")) {
-    matchedScenario = 1;
-    severity = "CRITICAL";
-    ruleId = "RULE-DDI-PGP-004";
-    customTitle = `CRITICAL P-gp Interaction: Digoxin + Amiodarone`;
-    customDesc = `Amiodarone inhibits P-glycoprotein efflux transport in renal tubules, reducing Digoxin clearance by 50% and doubling serum Digoxin concentrations, precipitating fatal cardiac arrhythmias and digitalis toxicity.`;
-  } else if (lower.includes("cipro") && lower.includes("amiodarone")) {
-    matchedScenario = 1;
-    severity = "CRITICAL";
-    ruleId = "RULE-QT-PROLONG-005";
-    customTitle = `Additive QTc Prolongation Risk: Ciprofloxacin + Amiodarone`;
-    customDesc = `Concurrent administration of multiple QTc-prolonging agents dramatically increases the probability of Torsades de Pointes ventricular tachycardia and sudden cardiac arrest.`;
-  } else if (lower.includes("enox") || lower.includes("lovenox") || lower.includes("clexane") || lower.includes("heparin")) {
-    matchedScenario = 2;
-  } else if (lower.includes("lisinopril") || lower.includes("enalapril")) {
-    matchedScenario = 3;
-  }
-
-  const base = DEMO_SCENARIO_RESULTS[matchedScenario];
-  const patient = localPatients.find((p) => p.id === patientId) || { id: patientId, name: "Inpatient Subject" };
-
-  const syntheticResult: SixAgentResult = {
-    ...base,
-    patient: {
-      identifier: patient.id,
-      name: patient.name,
-    },
-    findings: [
-      {
-        title: customTitle,
-        severity,
-        description: customDesc,
-        rule_id: ruleId,
-      },
-    ],
-  };
-
-  return fetchWithFallback<SixAgentResult>(
+): Promise<{ data: PairSeverityAdvisoryResult; isLive: boolean }> {
+  void patientId;
+  void dose;
+  const pair = drugName.split("+").map((name) => name.trim()).filter(Boolean);
+  if (pair.length !== 2) throw new Error("The severity advisory accepts exactly two drug names.");
+  return fetchWithFallback<PairSeverityAdvisoryResult>(
     "/ml/severity-advisory",
     {
       method: "POST",
       body: JSON.stringify({
-        patient_id: patientId,
-        drug_name: drugName,
-        dose,
+        drug_a: pair[0],
+        drug_b: pair[1],
+        interaction_documented: false,
       }),
-    },
-    () => syntheticResult
+    }
   );
 }

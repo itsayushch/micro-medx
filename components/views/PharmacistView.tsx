@@ -52,8 +52,8 @@ export function PharmacistView({
     let list = data.availability_queue;
     if (queueFilter === "AVAILABLE") {
       list = list.filter((q) => q.availability === "AVAILABLE");
-    } else if (queueFilter === "UNAVAILABLE") {
-      list = list.filter((q) => q.availability === "UNAVAILABLE");
+    } else if (queueFilter === "UNAVAILABLE" || queueFilter === "UNTRACKED") {
+      list = list.filter((q) => q.availability === queueFilter);
     } else if (queueFilter === "READY_TO_DISPENSE") {
       list = list.filter((q) => q.is_ready_for_dispensing);
     }
@@ -91,39 +91,39 @@ export function PharmacistView({
         <MetricCard
           title="Orders Received"
           value={data.stats.prescriptions_received}
-          change="+6"
-          trend="up"
-          hint="Total active orders"
+          change="Backend count"
+          trend="neutral"
+          hint="Persisted orders returned by the backend"
           icon={<Package className="w-4 h-4" />}
           variant="default"
         />
 
         <MetricCard
-          title="Available Stock"
+          title="Inventory Availability"
           value={data.stats.available}
-          change="In Stock"
-          trend="up"
-          hint="Ready for dispense"
+          change="Inventory status"
+          trend="neutral"
+          hint="Inventory is not represented in the database"
           icon={<CheckCircle2 className="w-4 h-4" />}
           variant="success"
         />
 
         <MetricCard
-          title="Shortages"
+          title="Pending Doctor Review"
           value={data.stats.substitution_required}
-          change={data.stats.substitution_required > 0 ? "Action Req" : "0"}
-          trend={data.stats.substitution_required > 0 ? "down" : "up"}
-          hint="Substitution required"
+          change="Substitution requests"
+          trend="neutral"
+          hint="Requests awaiting a doctor decision"
           icon={<AlertTriangle className="w-4 h-4" />}
           variant="critical"
         />
 
         <MetricCard
-          title="Dispensed Today"
+          title="Dispensing Status"
           value={data.stats.dispensed_today}
-          change="+14"
-          trend="up"
-          hint="Fulfillment sealed"
+          change="Not tracked"
+          trend="neutral"
+          hint="The connected database does not record dispensing events"
           icon={<Boxes className="w-4 h-4" />}
           variant="teal"
         />
@@ -131,7 +131,7 @@ export function PharmacistView({
         <MetricCard
           title="High-Risk Flags"
           value={data.stats.high_risk_flagged}
-          change={data.stats.high_risk_flagged > 0 ? "Alert" : "0"}
+          change="Backend findings"
           trend={data.stats.high_risk_flagged > 0 ? "down" : "up"}
           hint="Clinical alert active"
           icon={<ShieldAlert className="w-4 h-4" />}
@@ -139,11 +139,11 @@ export function PharmacistView({
         />
 
         <MetricCard
-          title="Formulary Value"
+          title="Inventory Value"
           value={data.stats.inventory_value}
-          change="Audited"
-          trend="up"
-          hint="Central stock asset"
+          change="Not tracked"
+          trend="neutral"
+          hint="No inventory valuation is available"
           icon={<Building className="w-4 h-4" />}
           variant="purple"
         />
@@ -158,10 +158,10 @@ export function PharmacistView({
             </div>
             <div>
               <h2 className="font-heading text-base font-bold text-slate-900 tracking-tight">
-                Medication Availability &amp; Fulfillment Queue
+                Persisted Prescription Queue
               </h2>
               <p className="text-xs text-slate-500">
-                Check prescribed drug stock against central formulary bins and coordinate physician substitution approvals.
+                Persisted prescriptions and substitution requests. Stock levels are not recorded in the connected database.
               </p>
             </div>
           </div>
@@ -169,12 +169,13 @@ export function PharmacistView({
           {/* Filter Pills & Search */}
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center bg-slate-100/80 p-1 rounded-xl border border-slate-200/70 text-xs font-semibold">
-              {(["ALL", "AVAILABLE", "UNAVAILABLE", "READY_TO_DISPENSE"] as const).map((filter) => {
+              {(["ALL", "AVAILABLE", "UNAVAILABLE", "UNTRACKED", "READY_TO_DISPENSE"] as const).map((filter) => {
                 const isActive = queueFilter === filter;
                 const labels: Record<string, string> = {
                   ALL: "All Cases",
                   AVAILABLE: "In Stock",
-                  UNAVAILABLE: "Shortages",
+                  UNAVAILABLE: "Unavailable",
+                  UNTRACKED: "Not tracked",
                   READY_TO_DISPENSE: "Ready to Dispense",
                 };
                 return (
@@ -235,7 +236,7 @@ export function PharmacistView({
                     <TableCell>
                       <div className="font-bold text-slate-900">{item.patient_name}</div>
                       <div className="text-[11px] text-slate-500">
-                        {item.age}y &bull; {item.sex} &bull; MRN: {item.mrn}
+                        {item.age == null ? "Age not recorded" : `${item.age}y`} &bull; {item.sex || "Sex not recorded"} &bull; MRN: {item.mrn || "Not recorded"}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -247,12 +248,14 @@ export function PharmacistView({
                     <TableCell>
                       <span
                         className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                          item.availability === "AVAILABLE"
+                        item.availability === "AVAILABLE"
                             ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                            : "bg-rose-100 text-rose-800 border border-rose-200"
+                            : item.availability === "UNAVAILABLE"
+                            ? "bg-rose-100 text-rose-800 border border-rose-200"
+                            : "bg-slate-100 text-slate-700 border border-slate-200"
                         }`}
                       >
-                        {item.availability === "AVAILABLE" ? "✓ In Stock" : "⚠️ Out of Stock"}
+                        {item.availability === "AVAILABLE" ? "Available" : item.availability === "UNAVAILABLE" ? "Unavailable" : "Not tracked"}
                       </span>
                       <div className="text-[11px] text-slate-500 font-mono mt-0.5">
                         {item.available_qty_formatted}
@@ -271,7 +274,7 @@ export function PharmacistView({
                         {item.substitution_status}
                       </span>
                     </TableCell>
-                    <TableCell className="text-slate-600">{item.prescribing_doctor}</TableCell>
+                    <TableCell className="text-slate-600">{item.prescribing_doctor || "Not recorded"}</TableCell>
                     <TableCell className="text-right">
                       {item.availability === "AVAILABLE" || item.is_ready_for_dispensing ? (
                         <Button
@@ -281,7 +284,7 @@ export function PharmacistView({
                           className="text-xs h-7.5 px-3 font-bold gap-1.5 shadow-2xs cursor-pointer"
                         >
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          Dispense / Fulfill
+                          Review order
                         </Button>
                       ) : (
                         <Button
@@ -290,7 +293,7 @@ export function PharmacistView({
                           className="text-xs h-7.5 px-3 font-bold gap-1.5 bg-amber-600 hover:bg-amber-700 text-white shadow-2xs cursor-pointer"
                         >
                           <Send className="w-3.5 h-3.5" />
-                          Propose Sub
+                          Request prescriber review
                         </Button>
                       )}
                     </TableCell>
@@ -314,7 +317,7 @@ export function PharmacistView({
                 Hospital Central Pharmacy Formulary Inventory
               </h2>
               <p className="text-xs text-slate-500">
-                Physical bin stock allocations, batch numbers, and manufacturer expiration tracking.
+                Inventory, batch, and expiry data are not represented by the connected database schema.
               </p>
             </div>
           </div>
@@ -346,6 +349,13 @@ export function PharmacistView({
               </TableRow>
             </TableHeader>
             <TableBody>
+              {filteredInventory.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-8 text-center text-slate-400">
+                    Inventory records are not available from the connected backend.
+                  </TableCell>
+                </TableRow>
+              )}
               {filteredInventory.map((inv, idx) => (
                 <TableRow key={idx}>
                   <TableCell className="font-bold text-slate-900">{inv.medication}</TableCell>

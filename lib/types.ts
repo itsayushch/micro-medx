@@ -25,12 +25,12 @@ export interface UserSession {
 export interface PatientDirectoryItem {
   id: string; // CASE-001 or PT-005
   name: string;
-  age: number;
-  sex: "M" | "F";
+  age: number | null;
+  sex: string;
   dept: string;
   condition: string;
   regimen: string;
-  risk: "Critical" | "High" | "Moderate" | "Low";
+  risk: "Critical" | "High" | "Moderate" | "Low" | "Not recorded";
   clinician: string;
 }
 
@@ -38,22 +38,22 @@ export interface PatientHistoryDetail {
   case_id: string;
   patient_identifier: string;
   name: string;
-  mrn: string;
-  age: number;
+  mrn: string | null;
+  age: number | null;
   sex: string;
-  blood_group: string;
+  blood_group: string | null;
   allergies_summary: string;
   conditions_summary: string;
-  last_updated: string;
+  last_updated: string | null;
   timeline: Array<{
-    date: string;
+    date: string | null;
     event: string;
     actor: string;
     badge: string;
   }>;
   medical_conditions: Array<{
     condition: string;
-    diagnosis_date: string;
+    diagnosis_date: string | null;
     status: string;
     notes: string;
   }>;
@@ -61,8 +61,8 @@ export interface PatientHistoryDetail {
     medication: string;
     strength: string;
     route: string;
-    start_date: string;
-    end_date: string;
+    start_date: string | null;
+    end_date: string | null;
     status: string;
     prescribing_doctor: string;
   }>;
@@ -70,10 +70,10 @@ export interface PatientHistoryDetail {
     allergen: string;
     reaction: string;
     severity: string;
-    recorded_date: string;
+    recorded_date: string | null;
   }>;
   laboratory_history: Array<{
-    date: string;
+    date: string | null;
     test: string;
     result: string;
     unit: string;
@@ -83,14 +83,14 @@ export interface PatientHistoryDetail {
     source_doc?: string;
   }>;
   clinical_assessments: Array<{
-    date: string;
+    date: string | null;
     assessment: string;
     risk_level: string;
     recommendation: string;
     doctor: string;
   }>;
   pharmacy_events: Array<{
-    date: string;
+    date: string | null;
     medication: string;
     availability: string;
     substitution_request: string;
@@ -98,11 +98,11 @@ export interface PatientHistoryDetail {
     dispensing_status: string;
   }>;
   audit_events: Array<{
-    timestamp: string;
+    timestamp: string | null;
     user_role: string;
     action: string;
     event_type: string;
-    audit_hash: string;
+    audit_hash: string | null;
   }>;
 }
 
@@ -110,6 +110,7 @@ export interface PatientHistoryDetail {
 // DOCTOR TYPES
 // ==========================================
 export interface SubstitutionRequestItem {
+  request_id?: number;
   case_id: string;
   patient_name: string;
   patient_identifier: string;
@@ -119,7 +120,7 @@ export interface SubstitutionRequestItem {
   pharmacist_name: string;
   request_time: string;
   clinical_reason: string;
-  status: "PENDING_DOCTOR_APPROVAL" | "APPROVED" | "REJECTED";
+  status: "PENDING" | "PENDING_DOCTOR_APPROVAL" | "APPROVED" | "REJECTED" | "CLARIFICATION_REQUIRED";
 }
 
 export interface PendingCosignItem {
@@ -214,6 +215,24 @@ export interface SixAgentResult {
   clinical_rationale?: string;
 }
 
+export interface PairSeverityAdvisoryResult {
+  advisory: {
+    drug_a: string;
+    drug_b: string;
+    display_severity: string;
+    display_severity_source: string;
+    predicted_severity: string;
+    probabilities: Record<string, number>;
+    pair_in_training_data: boolean;
+    clinically_validated: boolean;
+    answers_whether_interaction_exists: boolean;
+    explanation_text: string;
+    disclaimer: string;
+    limitations: string[];
+  };
+  notice: string;
+}
+
 // ==========================================
 // NURSE TYPES
 // ==========================================
@@ -226,7 +245,7 @@ export interface NurseMARItem {
   dose: string;
   route: string;
   scheduled_time: string;
-  status: "DUE" | "ADMINISTERED" | "HELD" | "MISSED" | "PENDING";
+  status: string;
   prescribing_doctor: string;
   nursing_note?: string;
   clinical_alert?: string | null;
@@ -246,7 +265,7 @@ export interface NurseVitalLabItem {
   value: string;
   unit: string;
   recorded_time: string;
-  status: "Normal" | "High" | "Critical" | "Low";
+  status: string;
   source_type: string;
   recorded_by: string;
   notes?: string;
@@ -256,7 +275,7 @@ export interface NurseVitalLabItem {
 export interface NurseDashboardData {
   role: "Nurse";
   stats: {
-    medications_due: number;
+    medications_due: number | null;
     medications_administered: number;
     medications_held: number;
     vitals_recorded: number;
@@ -264,6 +283,9 @@ export interface NurseDashboardData {
   };
   mar_schedule: NurseMARItem[];
   vitals_labs: NurseVitalLabItem[];
+  patients?: Array<{ patient_identifier: string; name: string }>;
+  mar_schedule_available?: boolean;
+  mar_schedule_note?: string;
 }
 
 // ==========================================
@@ -283,10 +305,12 @@ export interface MedicationAlternative {
 export interface AvailabilityQueueItem {
   case_id: string;
   patient_id: number;
+  order_id?: number;
+  medication_id?: number;
   patient_name: string;
   patient_identifier: string;
   mrn: string;
-  age: number;
+  age: number | null;
   sex: string;
   prescribed_medicine: string;
   prescribed_brand: string;
@@ -296,8 +320,8 @@ export interface AvailabilityQueueItem {
   route: string;
   frequency: string;
   prescribing_doctor: string;
-  availability: "AVAILABLE" | "UNAVAILABLE";
-  available_quantity: number;
+  availability: "AVAILABLE" | "UNAVAILABLE" | "UNTRACKED";
+  available_quantity: number | null;
   available_qty_formatted: string;
   status: string;
   substitution_status: string;
@@ -339,9 +363,9 @@ export interface PharmacistDashboardData {
   role: "Clinical Pharmacist";
   stats: {
     prescriptions_received: number;
-    available: number;
+    available: number | string;
     substitution_required: number;
-    dispensed_today: number;
+    dispensed_today: number | string;
     high_risk_flagged: number;
     inventory_value: string;
   };
@@ -358,7 +382,7 @@ export interface AuditLedgerRecord {
   timestamp: string;
   actor: string;
   role: string;
-  category: "CLINICAL" | "VERIFICATION" | "SUBSTITUTION" | "SAFETY" | "AUDIT";
+  category: "CLINICAL" | "CLINICAL EVENT" | "AUTHENTICATION" | "RESOLUTION" | "VERIFICATION" | "SUBSTITUTION" | "SAFETY" | "SYSTEM" | "AUDIT";
   entity: string;
   action: string;
   result: string;

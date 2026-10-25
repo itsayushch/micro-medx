@@ -1,17 +1,18 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle2, AlertTriangle, Package, MapPin, Calendar, ShieldCheck, ArrowRight } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Package, MapPin, ShieldCheck, ArrowRight } from "lucide-react";
 import { AvailabilityQueueItem } from "@/lib/types";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/toast";
 
 interface MedicationAvailabilityModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   item: AvailabilityQueueItem | null;
-  onDispense: (caseId: string) => Promise<void>;
+  onDispense: (item: AvailabilityQueueItem) => Promise<void>;
   onRequestSubstitution: (item: AvailabilityQueueItem) => void;
 }
 
@@ -22,17 +23,21 @@ export function MedicationAvailabilityModal({
   onDispense,
   onRequestSubstitution,
 }: MedicationAvailabilityModalProps) {
+  const { showToast } = useToast();
   const [submitting, setSubmitting] = React.useState(false);
 
   if (!item) return null;
 
   const isAvailable = item.availability === "AVAILABLE";
+  const isUnavailable = item.availability === "UNAVAILABLE";
 
   const handleDispenseClick = async () => {
     setSubmitting(true);
     try {
-      await onDispense(item.case_id);
+      await onDispense(item);
       onOpenChange(false);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Dispensing verification is unavailable.", "error");
     } finally {
       setSubmitting(false);
     }
@@ -47,25 +52,27 @@ export function MedicationAvailabilityModal({
               <span className="text-xs font-mono font-bold bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded">
                 {item.case_id}
               </span>
-              <span className="text-xs text-slate-500 font-medium">MRN: {item.mrn}</span>
+              <span className="text-xs text-slate-500 font-medium">MRN: {item.mrn || "Not recorded"}</span>
             </div>
             {isAvailable ? (
               <Badge variant="success" className="gap-1.5 py-1 px-3">
                 <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                In Stock & Available
+                Backend reports available
               </Badge>
-            ) : (
+            ) : isUnavailable ? (
               <Badge variant="critical" className="gap-1.5 py-1 px-3">
                 <AlertTriangle className="h-3.5 w-3.5 text-red-600" />
-                Medication Unavailable
+                Backend reports unavailable
               </Badge>
+            ) : (
+              <Badge variant="secondary" className="gap-1.5 py-1 px-3">Availability not tracked</Badge>
             )}
           </div>
           <DialogTitle className="mt-1 text-xl font-extrabold text-slate-900">
-            {item.patient_name} <span className="text-slate-400 font-normal">({item.age}y &bull; {item.sex})</span>
+            {item.patient_name} <span className="text-slate-400 font-normal">({item.age == null ? "Age not recorded" : `${item.age}y`} &bull; {item.sex || "Sex not recorded"})</span>
           </DialogTitle>
           <div className="text-xs text-slate-600 font-medium mt-0.5">
-            Prescribed by: <strong className="text-slate-800">{item.prescribing_doctor}</strong>
+            Prescribed by: <strong className="text-slate-800">{item.prescribing_doctor || "Not recorded"}</strong>
           </div>
         </DialogHeader>
 
@@ -104,8 +111,8 @@ export function MedicationAvailabilityModal({
                   </div>
                   <div>
                     <div className="text-xs text-slate-500 font-medium">Formulary Bin Location</div>
-                    <div className="text-sm font-bold text-slate-900">{item.bin_location || "Bin A-04"}</div>
-                    <div className="text-xs text-slate-400 mt-0.5">Pharmacy Central Storage</div>
+                    <div className="text-sm font-bold text-slate-900">{item.bin_location || "Not recorded"}</div>
+                    <div className="text-xs text-slate-400 mt-0.5">Location data from backend</div>
                   </div>
                 </div>
 
@@ -115,10 +122,8 @@ export function MedicationAvailabilityModal({
                   </div>
                   <div>
                     <div className="text-xs text-slate-500 font-medium">Batch / Lot & Expiry</div>
-                    <div className="text-sm font-bold text-slate-900">{item.lot_number || "WF-88392"}</div>
-                    <div className="text-xs text-emerald-600 font-semibold mt-0.5 flex items-center gap-1">
-                      <Calendar className="h-3 w-3" /> Valid (Exp 2027-11)
-                    </div>
+                    <div className="text-sm font-bold text-slate-900">{item.lot_number || "Not recorded"}</div>
+                    <div className="text-xs text-slate-500 font-semibold mt-0.5">Expiry data: Not recorded</div>
                   </div>
                 </div>
               </div>
@@ -129,30 +134,16 @@ export function MedicationAvailabilityModal({
                   <ShieldCheck className="h-4 w-4 text-emerald-600" />
                   Pharmacist Clinical Pre-Dispensing Checklist
                 </div>
-                <div className="space-y-1.5 text-xs text-slate-600">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                    <span>Patient allergy screening cleared: No penicillin / beta-lactam conflict with prescribed formulation.</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                    <span>Drug concentration verified against physician electronic signature.</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                    <span>Cryptographic audit event will be recorded upon verification.</span>
-                  </div>
-                </div>
+                <p className="text-xs text-slate-600">Availability status does not verify allergies, product equivalence, or prescription authorization. Confirm these through the established clinical workflow before dispensing.</p>
               </div>
             </div>
-          ) : (
-            /* IF UNAVAILABLE */
+          ) : isUnavailable ? (
+            /* Backend explicitly reports unavailable */
             <div className="space-y-4">
               <div className="rounded-xl border border-red-200 bg-red-50/60 p-4 flex items-start gap-3">
                 <AlertTriangle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
                 <div className="text-xs text-red-900 leading-relaxed">
-                  <strong className="font-bold">Stock Shortage:</strong> Prescribed brand{" "}
-                  <strong>{item.prescribed_brand}</strong> is completely out-of-stock across all hospital pharmacy bins.
+                  <strong className="font-bold">Availability reported unavailable:</strong> The backend does not provide bin-level stock or alternative-product evidence for this order.
                   Dispensing this order requires physician-verified therapeutic or brand substitution.
                 </div>
               </div>
@@ -160,7 +151,7 @@ export function MedicationAvailabilityModal({
               {/* Formularly Equivalents */}
               <div>
                 <div className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                  Configured Formulary Brand Equivalents Available In Stock:
+                  Proposed alternatives (clinical equivalence is not established here):
                 </div>
                 <div className="space-y-2">
                   {item.available_alternatives && item.available_alternatives.length > 0 ? (
@@ -173,11 +164,11 @@ export function MedicationAvailabilityModal({
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-bold text-slate-900">{alt.brand_name}</span>
                             <span className="text-xs text-slate-500 font-medium">({alt.generic_name})</span>
-                            <Badge variant="teal" className="text-[10px]">Identical Bioequivalence</Badge>
+                            <Badge variant="secondary" className="text-[10px]">Equivalence not verified</Badge>
                           </div>
                           <div className="text-xs text-slate-600 mt-1">
                             {alt.strength} &bull; {alt.formulation} &bull;{" "}
-                            <strong className="text-emerald-700">{alt.stock}</strong>
+                            {alt.stock || "Availability not recorded"}
                           </div>
                         </div>
                         <Button
@@ -201,6 +192,10 @@ export function MedicationAvailabilityModal({
                 </div>
               </div>
             </div>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              Inventory availability and alternatives are not recorded for this order. No stock or suitability conclusion can be made here.
+            </div>
           )}
         </div>
 
@@ -216,7 +211,7 @@ export function MedicationAvailabilityModal({
               className="gap-2 font-bold"
             >
               <CheckCircle2 className="h-4 w-4" />
-              {submitting ? "Processing..." : "Mark Ready for Dispensing"}
+              {submitting ? "Checking..." : "Request backend dispensing verification"}
             </Button>
           ) : (
             <Button

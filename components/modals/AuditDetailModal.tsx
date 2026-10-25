@@ -39,14 +39,14 @@ export function AuditDetailModal({
               </span>
               <span className="text-xs text-slate-400 font-mono">{record.timestamp}</span>
             </div>
-            <Badge variant="teal" className="bg-emerald-950 text-emerald-300 border-emerald-800 gap-1">
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-              Cryptographically Verified
+            <Badge variant="secondary" className="bg-slate-800 text-slate-200 border-slate-700 gap-1">
+              <ShieldCheck className="h-3.5 w-3.5 text-slate-300" />
+              Backend audit record
             </Badge>
           </div>
           <DialogTitle className="mt-1 text-xl font-bold text-white flex items-center gap-2">
             <Lock className="h-5 w-5 text-emerald-400" />
-            SHA-256 Cryptographic Block Details
+            Audit Record Details
           </DialogTitle>
           <div className="text-xs text-slate-400">
             Actor: <strong className="text-slate-200">{record.actor}</strong> &bull; Role:{" "}
@@ -75,7 +75,7 @@ export function AuditDetailModal({
           <div className="rounded-xl border border-slate-800 bg-slate-950 text-slate-200 p-4 font-mono text-xs space-y-3">
             <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 border-b border-slate-800 pb-2">
               <Hash className="h-4 w-4 text-emerald-400" />
-              Cryptographic Hash Chaining Verification
+              Hash values returned by the backend
             </div>
 
             <div>
@@ -87,7 +87,7 @@ export function AuditDetailModal({
 
             <div>
               <div className="text-[11px] text-emerald-400 font-bold mb-0.5">
-                Current Block SHA-256 Hash (current_hash):
+                Current record hash:
               </div>
               <div className="bg-slate-900 p-2 rounded border border-emerald-800/60 text-emerald-300 select-all break-all text-[11px] font-bold">
                 {record.current_hash}
@@ -95,8 +95,8 @@ export function AuditDetailModal({
             </div>
 
             <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
-              <span>Signature Standard: <strong>HMAC-SHA256</strong></span>
-              <span>Merkle Root Integrity: <strong className="text-emerald-400">VALID ✓</strong></span>
+              <span>Algorithm: <strong>Not specified by this API</strong></span>
+              <span>Chain integrity: <strong>Use the backend verification action</strong></span>
             </div>
           </div>
 
@@ -105,7 +105,7 @@ export function AuditDetailModal({
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                 <Code2 className="h-4 w-4 text-blue-600" />
-                Raw Immutable Block Payload (JSON)
+                Backend Record Payload (JSON)
               </span>
               <button
                 type="button"

@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import {
   DoctorDashboardData,
+  PairSeverityAdvisoryResult,
   PatientDirectoryItem,
   SixAgentResult,
   SubstitutionRequestItem,
@@ -47,77 +48,41 @@ interface DoctorViewProps {
   onRejectSubstitution: (caseId: string, notes: string) => Promise<void>;
   onCosignOrder: (simId: string, reason: string) => Promise<void>;
   onRunScenario: (scenarioId: number) => Promise<SixAgentResult>;
-  onEvaluateSandbox: (patientId: string, drugName: string, dose: string) => Promise<SixAgentResult>;
+  onEvaluateSandbox: (drugName: string) => Promise<PairSeverityAdvisoryResult>;
   onOpenPatientHistory: (patientId: string) => void;
   onOpenLabSource: (reportId: string) => void;
 }
 
 const COMMON_DRUGS = [
-  "Warfarin Sodium 2.5mg PO Daily",
-  "Warfarin Sodium 5mg PO Daily",
-  "Fluconazole 200mg PO Daily",
-  "Enoxaparin Sodium (Lovenox) 80mg SC Daily",
-  "Clexane (Enoxaparin) 80mg SC Daily",
-  "Lisinopril 20mg PO Daily",
-  "Enalapril Maleate 10mg PO Daily",
-  "Digoxin 0.125mg PO Daily",
-  "Amiodarone HCl 200mg PO Daily",
-  "Atorvastatin Calcium 20mg PO Daily",
-  "Micafungin 100mg IV Daily",
-  "Unfractionated Heparin 25,000 Units Infusion",
-  "Ciprofloxacin 500mg PO q12h",
-  "Aspirin 81mg PO Daily",
-  "Clopidogrel 75mg PO Daily",
-  "Spironolactone 25mg PO Daily",
+  // Keep suggestions to model-recognized ingredient names. Dose and route are
+  // entered separately and are not model features.
+  "Warfarin",
+  "Fluconazole",
+  "Enoxaparin",
+  "Lisinopril",
+  "Enalapril",
+  "Digoxin",
+  "Amiodarone",
+  "Atorvastatin",
+  "Micafungin",
+  "Heparin",
+  "Ciprofloxacin",
+  "Acetylsalicylic acid",
+  "Clopidogrel",
+  "Spironolactone",
 ];
 
-const MULTI_DRUG_PRESETS = [
-  {
-    label: "Warfarin + Fluconazole",
-    badge: "CYP2C9 Bleeding DDI",
-    patientId: "CASE-001",
-    drugs: [
-      { id: "p-1", name: "Warfarin Sodium", dose: "5 mg PO Daily" },
-      { id: "p-2", name: "Fluconazole", dose: "200 mg PO Daily" },
-    ],
-  },
-  {
-    label: "Lisinopril + Enalapril",
-    badge: "ACE-I Duplication",
-    patientId: "CASE-003",
-    drugs: [
-      { id: "p-1", name: "Lisinopril", dose: "20 mg PO Daily" },
-      { id: "p-2", name: "Enalapril Maleate", dose: "10 mg PO Daily" },
-    ],
-  },
-  {
-    label: "Digoxin + Amiodarone",
-    badge: "P-gp Toxicity",
-    patientId: "CASE-004",
-    drugs: [
-      { id: "p-1", name: "Digoxin", dose: "0.125 mg PO Daily" },
-      { id: "p-2", name: "Amiodarone HCl", dose: "200 mg PO Daily" },
-    ],
-  },
-  {
-    label: "Enoxaparin + Heparin",
-    badge: "Anticoagulation Duplication",
-    patientId: "CASE-002",
-    drugs: [
-      { id: "p-1", name: "Enoxaparin Sodium", dose: "80 mg SC Daily" },
-      { id: "p-2", name: "Heparin Sodium", dose: "5,000 Units IV Infusion" },
-    ],
-  },
-  {
-    label: "Ciprofloxacin + Amiodarone",
-    badge: "Additive QTc",
-    patientId: "CASE-001",
-    drugs: [
-      { id: "p-1", name: "Ciprofloxacin", dose: "500 mg PO q12h" },
-      { id: "p-2", name: "Amiodarone HCl", dose: "200 mg PO Daily" },
-    ],
-  },
-];
+const MODEL_NAME_ALIASES: Record<string, string> = {
+  "enoxaparin sodium (lovenox) 80mg sc daily": "Enoxaparin",
+  "clexane (enoxaparin) 80mg sc daily": "Enoxaparin",
+  "enoxaparin sodium (lovenox)": "Enoxaparin",
+  "clexane (enoxaparin)": "Enoxaparin",
+};
+
+function modelDrugName(name: string): string {
+  const trimmed = name.trim();
+  return MODEL_NAME_ALIASES[trimmed.toLocaleLowerCase().replace(/\s+/g, " ")] || trimmed;
+}
 
 export function DoctorView({
   data,
@@ -132,19 +97,16 @@ export function DoctorView({
   const { showToast } = useToast();
 
   // Prescribing sandbox multi-drug state
-  const [sandboxPatient, setSandboxPatient] = React.useState("CASE-001");
-  const [prescribedDrugs, setPrescribedDrugs] = React.useState<{ id: string; name: string; dose: string }[]>([
-    { id: "init-1", name: "Warfarin Sodium", dose: "5 mg PO Daily" },
-  ]);
+  const [prescribedDrugs, setPrescribedDrugs] = React.useState<{ id: string; name: string; dose: string }[]>([]);
   const [currentDrugInput, setCurrentDrugInput] = React.useState("");
-  const [currentDoseInput, setCurrentDoseInput] = React.useState("200 mg PO Daily");
+  const [currentDoseInput, setCurrentDoseInput] = React.useState("");
   const [sandboxEvaluating, setSandboxEvaluating] = React.useState(false);
   const [drugSuggestions, setDrugSuggestions] = React.useState<string[]>([]);
 
   // Active AI evaluation result
   const [evaluationResult, setEvaluationResult] = React.useState<SixAgentResult | null>(null);
-  const [activeScenarioId, setActiveScenarioId] = React.useState<number | null>(null);
-  const [scenarioEvaluating, setScenarioEvaluating] = React.useState<number | null>(null);
+  const [advisoryResult, setAdvisoryResult] = React.useState<PairSeverityAdvisoryResult | null>(null);
+  const [activeScenarioId] = React.useState<number | null>(null);
 
   // Substitution action state
   const [processingSubId, setProcessingSubId] = React.useState<string | null>(null);
@@ -164,7 +126,7 @@ export function DoctorView({
     const rawName = (nameToAdd || currentDrugInput).trim();
     if (!rawName) return;
 
-    // Support comma or plus separated entries e.g. "Warfarin, Fluconazole" or "Warfarin + Fluconazole"
+    // Support comma or plus separated names without mixing dose/route text into the model input.
     const splitNames = rawName.includes("+")
       ? rawName.split("+").map((s) => s.trim()).filter(Boolean)
       : rawName.includes(",")
@@ -172,19 +134,10 @@ export function DoctorView({
       : [rawName];
 
     const newItems = splitNames.map((n, i) => {
-      const parts = n.split(" ");
-      let drugTitle = n;
-      let drugDose = doseToAdd || currentDoseInput || "Standard PO Daily";
-
-      if (parts.length > 2 && (parts[1].includes("mg") || parts[1].includes("Units") || parts[1].includes("g"))) {
-        drugTitle = parts[0];
-        drugDose = parts.slice(1).join(" ");
-      }
-
       return {
         id: `drug-${Date.now()}-${i}`,
-        name: drugTitle,
-        dose: drugDose,
+        name: n,
+        dose: doseToAdd || currentDoseInput || "Dose not specified",
       };
     });
 
@@ -204,89 +157,65 @@ export function DoctorView({
     });
   };
 
-  const handleSelectMultiPreset = (combo: {
-    label: string;
-    badge: string;
-    patientId: string;
-    drugs: { id: string; name: string; dose: string }[];
-  }) => {
-    setSandboxPatient(combo.patientId);
-    setPrescribedDrugs(combo.drugs.map((d, i) => ({ ...d, id: `combo-${Date.now()}-${i}` })));
-    setCurrentDrugInput("");
-    setDrugSuggestions([]);
-    showToast(`Loaded ${combo.label} (${combo.badge}) into prescription regimen.`, "info");
-  };
-
-  const handleRunScenarioClick = async (scenarioId: number) => {
-    setScenarioEvaluating(scenarioId);
-    setActiveScenarioId(scenarioId);
-    try {
-      const res = await onRunScenario(scenarioId);
-      setEvaluationResult(res);
-      showToast(`Scenario ${scenarioId} evaluated across 6-agent clinical pipeline.`, "success");
-    } catch (err: any) {
-      showToast(err.message || "Failed to run scenario", "error");
-    } finally {
-      setScenarioEvaluating(null);
-    }
-  };
-
   const handleEvaluateSandboxClick = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    let allDrugs = [...prescribedDrugs];
+    const allDrugs = [...prescribedDrugs];
     if (currentDrugInput.trim()) {
-      const parts = currentDrugInput.trim().split(" ");
-      let drugTitle = currentDrugInput.trim();
-      let drugDose = currentDoseInput || "Standard PO Daily";
-      if (parts.length > 2 && (parts[1].includes("mg") || parts[1].includes("Units"))) {
-        drugTitle = parts[0];
-        drugDose = parts.slice(1).join(" ");
-      }
       allDrugs.push({
         id: `drug-${Date.now()}`,
-        name: drugTitle,
-        dose: drugDose,
+        name: currentDrugInput.trim(),
+        dose: currentDoseInput || "Dose not specified",
       });
       setPrescribedDrugs(allDrugs);
       setCurrentDrugInput("");
       setDrugSuggestions([]);
     }
 
-    if (allDrugs.length === 0) {
-      showToast("Please add at least one medication to evaluate.", "warning");
+    if (allDrugs.length !== 2) {
+      showToast("The severity advisory accepts exactly two drug names.", "warning");
+      return;
+    }
+
+    const modelNames = allDrugs.map((drug) => modelDrugName(drug.name));
+    if (modelNames[0].toLocaleLowerCase() === modelNames[1].toLocaleLowerCase()) {
+      showToast("Both entries refer to the same active ingredient. Choose two different drugs for a pair advisory.", "warning");
       return;
     }
 
     setSandboxEvaluating(true);
     try {
-      const combinedNames = allDrugs.map((d) => d.name).join(" + ");
-      const combinedDoses = allDrugs.map((d) => `${d.name}: ${d.dose}`).join(" | ");
-      const res = await onEvaluateSandbox(sandboxPatient, combinedNames, combinedDoses);
-      setEvaluationResult(res);
-      showToast(`Evaluated ${allDrugs.length} medication${allDrugs.length > 1 ? "s" : ""} across 6-agent clinical pipeline.`, "success");
-    } catch (err: any) {
-      showToast(err.message || "Failed to evaluate prescription", "error");
+      const combinedNames = modelNames.join(" + ");
+      const res = await onEvaluateSandbox(combinedNames);
+      setAdvisoryResult(res);
+      setEvaluationResult(null);
+      showToast("Severity advisory received from the backend.", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to evaluate prescription", "error");
     } finally {
       setSandboxEvaluating(false);
     }
   };
 
-  const handleApproveSub = async (caseId: string) => {
-    setProcessingSubId(caseId);
+  const handleApproveSub = async (requestId: string) => {
+    setProcessingSubId(requestId);
     try {
-      await onApproveSubstitution(caseId, "Physician authorized formulary substitution based on equivalent efficacy.");
-      showToast(`Substitution for ${caseId} approved and recorded.`, "success");
+      await onApproveSubstitution(requestId, "Physician approved the substitution request.");
+      showToast("Substitution decision recorded.", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not record the decision.", "error");
     } finally {
       setProcessingSubId(null);
     }
   };
 
-  const handleRejectSub = async (caseId: string) => {
-    setProcessingSubId(caseId);
+  const handleRejectSub = async (requestId: string) => {
+    setProcessingSubId(requestId);
     try {
-      await onRejectSubstitution(caseId, "Physician declined brand substitution; hold order pending specialist review.");
-      showToast(`Substitution for ${caseId} rejected.`, "warning");
+      await onRejectSubstitution(requestId, "Physician rejected the substitution request.");
+      showToast("Substitution decision recorded.", "warning");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not record the decision.", "error");
     } finally {
       setProcessingSubId(null);
     }
@@ -295,8 +224,10 @@ export function DoctorView({
   const handleCosignClick = async (simId: string) => {
     setProcessingCosignId(simId);
     try {
-      await onCosignOrder(simId, "Physician authorized clinical safety override & validated dosage adjustment.");
-      showToast("Order co-signature verified and sealed on SHA-256 ledger.", "success");
+      await onCosignOrder(simId, "Physician decision recorded after review.");
+      showToast("Order decision recorded by the backend.", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not record the co-sign.", "error");
     } finally {
       setProcessingCosignId(null);
     }
@@ -307,11 +238,11 @@ export function DoctorView({
       {/* 4 HIGH-IMPACT KPI STAT CARDS (MarkMyAd Style) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
-          title="Active Inpatients"
+          title="Patient Records"
           value={data.stats.total_patients}
-          change="+12"
-          trend="up"
-          hint="Assigned to Acute Inpatient Service"
+          change="Backend count"
+          trend="neutral"
+          hint="Patient records returned by the backend"
           icon={<Users className="w-4 h-4" />}
           variant="default"
         />
@@ -364,7 +295,7 @@ export function DoctorView({
             </div>
           </div>
           <span className="self-start sm:self-auto px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-50 text-teal-700 border border-teal-200/80">
-            {data.substitution_requests.length} Pending Approval
+            {data.substitution_requests.filter((request) => request.status === "PENDING").length} Pending Approval
           </span>
         </div>
 
@@ -396,7 +327,7 @@ export function DoctorView({
                     </div>
                     <div className="font-bold text-slate-900 text-sm">{sub.original_prescription}</div>
                     <div className="text-xs text-rose-700 font-semibold mt-1">
-                      ⚠️ Stock Depleted (0 Units in Central Formulary)
+                      Inventory status is not tracked
                     </div>
                   </div>
 
@@ -406,7 +337,7 @@ export function DoctorView({
                     </div>
                     <div className="font-bold text-slate-900 text-sm">{sub.suggested_alternative}</div>
                     <div className="text-xs text-teal-700 font-semibold mt-1">
-                      ✓ {sub.stock_detail}
+                      {sub.stock_detail}
                     </div>
                   </div>
                 </div>
@@ -422,11 +353,11 @@ export function DoctorView({
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-200/60">
-                  <Button
+                  {sub.status === "PENDING" ? <><Button
                     size="sm"
                     variant="outline"
-                    onClick={() => handleRejectSub(sub.case_id)}
-                    disabled={processingSubId === sub.case_id}
+                    onClick={() => handleRejectSub(String(sub.request_id))}
+                    disabled={processingSubId === String(sub.request_id)}
                     className="text-xs font-semibold text-rose-700 border-rose-200 hover:bg-rose-50 hover:text-rose-800"
                   >
                     Reject Substitution
@@ -434,13 +365,13 @@ export function DoctorView({
                   <Button
                     size="sm"
                     variant="success"
-                    onClick={() => handleApproveSub(sub.case_id)}
-                    disabled={processingSubId === sub.case_id}
+                    onClick={() => handleApproveSub(String(sub.request_id))}
+                    disabled={processingSubId === String(sub.request_id)}
                     className="text-xs font-bold gap-1.5 shadow-xs"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Approve Brand Substitution
-                  </Button>
+                  </Button></> : <span className="text-xs font-semibold text-slate-600">Status: {sub.status}</span>}
                 </div>
               </div>
             ))}
@@ -531,105 +462,32 @@ export function DoctorView({
 
       {/* SIDE-BY-SIDE: CLINICAL CASES & PRESCRIBING WORKSTATION */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: 1-Click Interactive Scenarios (5 cols) */}
+        {/* Left: persisted findings (5 cols) */}
         <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <Sparkles className="w-4 h-4 text-indigo-600" />
+              <AlertTriangle className="w-4 h-4 text-indigo-600" />
               <h2 className="font-heading text-base font-bold text-slate-900 tracking-tight">
-                Deterministic CDS Scenarios
+                Persisted Clinical Findings
               </h2>
             </div>
             <p className="text-xs text-slate-500 mb-4">
-              Execute validated clinical safety evaluations through the 6-agent engine with real lab telemetry.
+              Findings recorded in the connected backend. Review the patient history for supporting records.
             </p>
 
             <div className="space-y-3">
-              {/* Scenario 1 */}
-              <div
-                onClick={() => handleRunScenarioClick(1)}
-                className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
-                  activeScenarioId === 1
-                    ? "bg-blue-50/80 border-blue-300 ring-2 ring-blue-500/20"
-                    : "bg-slate-50/60 border-slate-200/80 hover:border-slate-300 hover:bg-slate-50"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-1 mb-1">
-                  <div className="text-xs font-bold text-slate-900">
-                    Case 1: Warfarin + Fluconazole CYP2C9
-                  </div>
-                  <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
-                    Critical Risk
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 line-clamp-2">
-                  Patient Sarah Jenkins &bull; Baseline INR 3.4 &bull; Flagged CYP2C9 inhibition &amp; catastrophic bleeding risk.
-                </p>
-                <div className="mt-2 text-right">
-                  <span className="text-[11px] font-bold text-blue-600 inline-flex items-center gap-1">
-                    {scenarioEvaluating === 1 ? "Running 6-Agent AI..." : "Evaluate Case 1 →"}
-                  </span>
-                </div>
-              </div>
-
-              {/* Scenario 2 */}
-              <div
-                onClick={() => handleRunScenarioClick(2)}
-                className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
-                  activeScenarioId === 2
-                    ? "bg-blue-50/80 border-blue-300 ring-2 ring-blue-500/20"
-                    : "bg-slate-50/60 border-slate-200/80 hover:border-slate-300 hover:bg-slate-50"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-1 mb-1">
-                  <div className="text-xs font-bold text-slate-900">
-                    Case 2: Enoxaparin (LMWH) Renal Clearance
-                  </div>
-                  <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                    High Risk
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 line-clamp-2">
-                  Patient Robert Chen &bull; Cr 2.4 mg/dL (eGFR 28 mL/min) &bull; LMWH bioaccumulation hazard.
-                </p>
-                <div className="mt-2 text-right">
-                  <span className="text-[11px] font-bold text-blue-600 inline-flex items-center gap-1">
-                    {scenarioEvaluating === 2 ? "Running 6-Agent AI..." : "Evaluate Case 2 →"}
-                  </span>
-                </div>
-              </div>
-
-              {/* Scenario 3 */}
-              <div
-                onClick={() => handleRunScenarioClick(3)}
-                className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
-                  activeScenarioId === 3
-                    ? "bg-blue-50/80 border-blue-300 ring-2 ring-blue-500/20"
-                    : "bg-slate-50/60 border-slate-200/80 hover:border-slate-300 hover:bg-slate-50"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-1 mb-1">
-                  <div className="text-xs font-bold text-slate-900">
-                    Case 3: Lisinopril + Enalapril ACE-I Duplication
-                  </div>
-                  <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                    Duplication
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 line-clamp-2">
-                  Patient Elena Rostova &bull; Redundant ACE-inhibitor class duplication &amp; profound hypotension hazard.
-                </p>
-                <div className="mt-2 text-right">
-                  <span className="text-[11px] font-bold text-blue-600 inline-flex items-center gap-1">
-                    {scenarioEvaluating === 3 ? "Running 6-Agent AI..." : "Evaluate Case 3 →"}
-                  </span>
-                </div>
-              </div>
+              {data.active_findings.length === 0 ? <p className="rounded-lg bg-slate-50 p-4 text-xs text-slate-500">No findings are recorded by the backend.</p> : data.active_findings.map((finding) => (
+                <button key={finding.id} type="button" onClick={() => onOpenPatientHistory(finding.patient_id)} className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-left hover:border-slate-300">
+                  <div className="flex items-center justify-between gap-2"><strong className="text-xs text-slate-900">{finding.title}</strong><span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">{finding.severity}</span></div>
+                  <p className="mt-1 text-[11px] text-slate-600">{finding.description || "No description recorded."}</p>
+                  <span className="mt-2 block text-[10px] font-mono text-slate-500">Patient record: {finding.patient_id}</span>
+                </button>
+              ))}
             </div>
           </div>
 
           <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] text-slate-400">
-            Validated against offline clinical pharmacology knowledge packs &amp; KDIGO guidelines.
+            This panel displays persisted records and does not create or validate clinical findings.
           </div>
         </div>
 
@@ -642,25 +500,12 @@ export function DoctorView({
             </h2>
           </div>
           <p className="text-xs text-slate-500 mb-4">
-            Simulate novel inpatient prescriptions in real-time with automatic drug-drug &amp; lab parameter safety validation.
+              Request a backend ML severity estimate for one drug pair. It does not determine whether the pair interacts or use patient context, dose, or route.
           </p>
 
           <form onSubmit={handleEvaluateSandboxClick} className="space-y-4">
-            {/* Active Inpatient Context */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Active Inpatient Context
-              </label>
-              <Select
-                value={sandboxPatient}
-                onChange={(e) => setSandboxPatient(e.target.value)}
-                className="w-full text-xs font-medium"
-              >
-                <option value="CASE-001">Sarah Jenkins (CASE-001) — AF w/ Warfarin • CrCl 65 mL/min</option>
-                <option value="CASE-002">Robert Chen (CASE-002) — DVT w/ CKD Stage 3B • CrCl 28 mL/min</option>
-                <option value="CASE-003">Elena Rostova (CASE-003) — Hypertension Stage II • CrCl 78 mL/min</option>
-                <option value="CASE-004">Arthur Pendelton (CASE-004) — CHF &amp; Digoxin • CrCl 42 mL/min</option>
-              </Select>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Advisory only: the model estimates severity only when an interaction is independently documented. It cannot establish interaction existence or clinical safety.
             </div>
 
             {/* CURRENT PRESCRIBED REGIMEN (CHIPS / TAGS) */}
@@ -713,7 +558,7 @@ export function DoctorView({
             {/* PRESCRIBE DRUG INPUT WITH INTELLIGENT AUTOCOMPLETE */}
             <div className="relative">
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Prescribe Drug Name (Intelligent Suggestions — Accepts Multiple Drugs)
+                Drug Name / Active Ingredient (Suggestions use known model names)
               </label>
               <div className="flex items-center gap-2">
                 <div className="relative flex-1">
@@ -813,44 +658,45 @@ export function DoctorView({
               ))}
             </div>
 
-            {/* 1-Click Multi-Drug Regimen Presets */}
-            <div className="pt-2 border-t border-slate-100">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center justify-between">
-                <span>1-Click Multi-Drug Test Combinations:</span>
-                <span className="text-[10px] text-indigo-600 font-bold">Pre-configured DDI Challenges</span>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {MULTI_DRUG_PRESETS.map((combo, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => handleSelectMultiPreset(combo)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50/70 hover:bg-indigo-100/80 border border-indigo-200/70 text-indigo-900 text-xs font-bold transition-all cursor-pointer hover:shadow-2xs"
-                  >
-                    <span>{combo.label}</span>
-                    <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-200/80 text-indigo-900 font-extrabold">
-                      {combo.badge}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* Evaluation Submit Button */}
             <Button
               type="submit"
-              disabled={sandboxEvaluating || (prescribedDrugs.length === 0 && !currentDrugInput.trim())}
+              disabled={sandboxEvaluating || prescribedDrugs.length + (currentDrugInput.trim() ? 1 : 0) !== 2}
               className="w-full h-11 text-xs font-bold uppercase tracking-wider bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20"
             >
               {sandboxEvaluating
-                ? "Evaluating Multi-Drug Regimen with 6-Agent AI..."
-                : `Run 6-Agent Safety Evaluation (${prescribedDrugs.length || 1} Medication${
+                ? "Requesting backend estimate..."
+                : `Get Pair Severity Advisory (${prescribedDrugs.length} Medication${
                     (prescribedDrugs.length || 1) > 1 ? "s" : ""
                   } in Regimen)`}
             </Button>
           </form>
         </div>
       </div>
+
+      {advisoryResult && (
+        <section className="rounded-2xl border border-amber-200 bg-white p-5 shadow-xs" aria-live="polite">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-amber-800">Backend ML severity advisory</p>
+              <h3 className="mt-1 text-lg font-bold text-slate-900">{advisoryResult.advisory.drug_a} + {advisoryResult.advisory.drug_b}</h3>
+              <p className="mt-1 text-sm text-slate-700">{advisoryResult.notice}</p>
+            </div>
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">
+              {advisoryResult.advisory.display_severity} · {advisoryResult.advisory.display_severity_source}
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-slate-600">{advisoryResult.advisory.explanation_text}</p>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            {Object.entries(advisoryResult.advisory.probabilities).map(([label, probability]) => (
+              <span key={label} className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1">{label}: {(probability * 100).toFixed(1)}%</span>
+            ))}
+          </div>
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-600">
+            {advisoryResult.advisory.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}
+          </ul>
+        </section>
+      )}
 
       {/* SECTION: EXPLAINABLE AI (XAI) EVALUATION CONTAINER */}
       {evaluationResult && (
@@ -969,9 +815,11 @@ export function DoctorView({
                 <Button
                   size="sm"
                   variant="success"
-                  onClick={() =>
-                    handleCosignClick(evaluationResult.simulated_orders[0]?.simulation_id || "SIM-DEMO")
-                  }
+                  onClick={() => {
+                    const simulationId = evaluationResult.simulated_orders[0]?.simulation_id;
+                    if (simulationId) void handleCosignClick(simulationId);
+                  }}
+                  disabled={!evaluationResult.simulated_orders[0]?.simulation_id || processingCosignId !== null}
                   className="text-xs font-bold gap-1.5 shadow-xs"
                 >
                   <CheckCircle2 className="w-4 h-4" />
@@ -1104,7 +952,7 @@ export function DoctorView({
                 <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
                   <td className="py-3 px-3 font-mono font-bold text-blue-700">{pt.id}</td>
                   <td className="py-3 px-3 font-bold text-slate-900">{pt.name}</td>
-                  <td className="py-3 px-3 text-slate-600">{pt.age}y &bull; {pt.sex}</td>
+                  <td className="py-3 px-3 text-slate-600">{pt.age == null ? "Age not recorded" : `${pt.age}y`} &bull; {pt.sex || "Not recorded"}</td>
                   <td className="py-3 px-3 text-slate-600">{pt.dept}</td>
                   <td className="py-3 px-3 text-slate-800">{pt.condition}</td>
                   <td className="py-3 px-3 text-slate-700 font-mono text-[11px]">{pt.regimen}</td>

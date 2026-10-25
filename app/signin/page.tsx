@@ -6,20 +6,14 @@ import {
   Shield,
   Lock,
   Phone,
-  ArrowRight,
-  CheckCircle2,
   Stethoscope,
   HeartPulse,
   Pill,
   ShieldCheck,
-  Sparkles,
-  KeyRound,
-  Activity,
-  Cpu,
   AlertTriangle,
 } from "lucide-react";
 import { RoleType } from "@/lib/types";
-import { CLINICAL_PERSONAS } from "@/lib/mock-data";
+import { DEMO_PASSWORD, DEMO_PHONE_BY_ROLE } from "@/lib/demo-credentials";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
@@ -32,13 +26,6 @@ const ROLE_ICONS: Record<RoleType, React.ReactNode> = {
   Administrator: <ShieldCheck className="w-5 h-5" />,
 };
 
-const ROLE_BADGES: Record<RoleType, { roleTag: string; color: string; border: string; bg: string }> = {
-  Doctor: { roleTag: "Attending Inpatient Physician", color: "text-blue-600", border: "border-blue-500", bg: "bg-blue-50/80" },
-  Nurse: { roleTag: "Critical Care Staff Nurse", color: "text-teal-600", border: "border-teal-500", bg: "bg-teal-50/80" },
-  "Clinical Pharmacist": { roleTag: "Specialist Clinical Pharmacist", color: "text-purple-600", border: "border-purple-500", bg: "bg-purple-50/80" },
-  Administrator: { roleTag: "Health Informatics Administrator", color: "text-slate-800", border: "border-slate-700", bg: "bg-slate-100" },
-};
-
 function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -48,27 +35,18 @@ function SignInForm() {
   const queryRole = searchParams.get("role") as RoleType | null;
   const isReAuth = Boolean(queryRole && (queryRole === "Nurse" || queryRole === "Doctor"));
 
-  const initialRole: RoleType = (queryRole && CLINICAL_PERSONAS[queryRole]) ? queryRole : "Doctor";
+  const supportedRoles: RoleType[] = ["Doctor", "Nurse", "Clinical Pharmacist", "Administrator"];
+  const initialRole: RoleType = queryRole && supportedRoles.includes(queryRole) ? queryRole : "Doctor";
 
   const [selectedRole, setSelectedRole] = React.useState<RoleType>(initialRole);
-  const [phone, setPhone] = React.useState<string>(CLINICAL_PERSONAS[initialRole]?.phone || CLINICAL_PERSONAS["Doctor"].phone);
-  const [password, setPassword] = React.useState<string>("ClinicalAccess2026!");
+  const [phone, setPhone] = React.useState<string>(DEMO_PHONE_BY_ROLE[initialRole]);
+  const [password, setPassword] = React.useState<string>(DEMO_PASSWORD);
   const [submitting, setSubmitting] = React.useState<boolean>(false);
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
 
-  // Update role if query param changes
-  React.useEffect(() => {
-    if (queryRole && CLINICAL_PERSONAS[queryRole]) {
-      setSelectedRole(queryRole);
-      setPhone(CLINICAL_PERSONAS[queryRole].phone);
-    }
-  }, [queryRole]);
-
-  const persona = CLINICAL_PERSONAS[selectedRole];
-
   const handleSelectRole = (role: RoleType) => {
     setSelectedRole(role);
-    setPhone(CLINICAL_PERSONAS[role].phone);
+    setPhone(DEMO_PHONE_BY_ROLE[role]);
     setErrorMsg(null);
   };
 
@@ -79,23 +57,10 @@ function SignInForm() {
 
     try {
       await login(selectedRole, phone, password);
-      showToast(`Signed in as ${persona.name} (${selectedRole} Workspace)`, "success");
+      showToast(`Signed in to ${selectedRole} workspace`, "success");
       router.push("/");
-    } catch (err: any) {
-      console.error("Login attempt fallback handled:", err);
-      await login(selectedRole, phone, password);
-      router.push("/");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleDirectBypass = async (role: RoleType) => {
-    setSubmitting(true);
-    try {
-      await login(role, CLINICAL_PERSONAS[role].phone, "ClinicalAccess2026!");
-      showToast(`Quick-launched ${role} Workspace`, "info");
-      router.push("/");
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Sign-in failed. Check your credentials and try again.");
     } finally {
       setSubmitting(false);
     }
@@ -139,7 +104,7 @@ function SignInForm() {
         {/* Role Selection Tabs */}
         <div className="mb-6">
           <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 text-center font-poppins">
-            Select Clinician Persona
+            Select Demo Role
           </label>
           <div className="grid grid-cols-4 gap-2">
             {(["Doctor", "Nurse", "Clinical Pharmacist", "Administrator"] as RoleType[]).map((role) => {
@@ -196,7 +161,10 @@ function SignInForm() {
               <span>Mobile Number</span>
             </label>
             <Input
-              type="text"
+              type="tel"
+              name="username"
+              autoComplete="username"
+              inputMode="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               className="h-10 text-xs font-medium"
@@ -211,6 +179,8 @@ function SignInForm() {
             </label>
             <Input
               type="password"
+              name="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="h-10 text-xs font-medium"
